@@ -107,6 +107,7 @@ edit_path: /hive-heating/schedule-edit
 
 ## Changelog
 
+- **1.3.2**: the schedule card follows the dashboard's light/dark colours (`--hs-*` CSS variables) and shows a message if saving fails.
 - **1.3.1**: the schedule editor accepts any minute (not only 15-minute steps). There's no limit on periods per day.
 - **1.3.0**: the scroll wheel automatically shows the room's photo if the radiator's Area has a picture (Settings > Areas). `photo:` still overrides it; `area_photo: false` turns it off.
 - **1.2.0**: `hive-temp-picker` takes an optional `photo:` (image URL) shown softly behind the colour.
