@@ -1,0 +1,314 @@
+# Hive-style thermostat cards - Home Assistant package
+#
+# Helpers, scripts and an automation used by the example dashboard.
+# Install: copy this file to /config/packages/ and make sure configuration.yaml has
+#   homeassistant:
+#     packages: !include_dir_named packages
+# then restart Home Assistant.
+#
+# Replace the example entity IDs with your own:
+#   climate.hive_thermostat              -> your Hive heating thermostat
+#   water_heater.hive_hot_water          -> your Hive hot water
+#   binary_sensor.hive_thermostat_boost  -> Hive "Boost" binary sensor (heating)
+#   binary_sensor.hive_hot_water_boost   -> Hive "Hotwater Boost" binary sensor
+#   timer.boost_study_radiator           -> one timer per NON-Hive valve: timer.boost_<valve object id>
+
+input_boolean:
+  hive_ha_schedule:
+    name: Home Assistant runs the heating schedule
+    icon: mdi:calendar-clock
+  heating_away_mode:
+    name: Away / holiday mode
+    icon: mdi:airplane
+
+timer:
+  # Boost timer for a non-Hive radiator valve (Sonoff, Aqara, Tuya...).
+  # The name must be boost_<object id of the climate entity>.
+  boost_study_radiator:
+    name: Boost study radiator
+    icon: mdi:bullseye
+    duration: "01:00:00"
+    restore: true
+
+script:
+  hive_boost:
+    alias: Hive - toggle boost
+    description: >-
+      Starts a boost, or cancels it if one is running. Hive thermostat and hot water use
+      Hive's own boost. Hive radiator valves use Hive's boost but are cancelled by restoring a
+      snapshot (the Hive integration's boost_heating_off fails on TRVs). Other valves are boosted
+      by Home Assistant with timer.boost_<object id>.
+    icon: mdi:bullseye
+    mode: parallel
+    fields:
+      entity_id:
+        name: Entity
+        required: true
+        selector:
+          entity:
+            domain: [climate, water_heater]
+      minutes:
+        name: Minutes
+        default: 60
+        selector:
+          number: {min: 30, max: 360, step: 30}
+      temperature:
+        name: Temperature
+        default: 21
+        selector:
+          number: {min: 7, max: 30, step: 0.5}
+    sequence:
+      - variables:
+          temp: "{{ temperature | default(21) | float }}"
+          period: "{{ '%02d:%02d:00' % ((minutes | default(60) | int) // 60, (minutes | default(60) | int) % 60) }}"
+          is_water: "{{ entity_id.startswith('water_heater.') }}"
+          is_main: "{{ entity_id == 'climate.hive_thermostat' }}"
+          is_hive: "{{ entity_id.startswith('water_heater.') or 'boost' in (state_attr(entity_id, 'preset_modes') or []) }}"
+          boost_timer: "timer.boost_{{ entity_id.split('.')[1] }}"
+          restore_scene: "scene.hive_boost_{{ entity_id.split('.')[1] }}"
+          restore_scene_id: "hive_boost_{{ entity_id.split('.')[1] }}"
+          boosting: >-
+            {% if entity_id == 'climate.hive_thermostat' %}{{ is_state('binary_sensor.hive_thermostat_boost', 'on') }}
+            {% elif entity_id == 'water_heater.hive_hot_water' %}{{ is_state('binary_sensor.hive_hot_water_boost', 'on') }}
+            {% elif 'boost' in (state_attr(entity_id, 'preset_modes') or []) %}{{ is_state_attr(entity_id, 'preset_mode', 'boost') }}
+            {% else %}{{ is_state('timer.boost_' ~ entity_id.split('.')[1], 'active') }}{% endif %}
+      - choose:
+          - alias: Hot water
+            conditions: "{{ is_water }}"
+            sequence:
+              - action: hive.boost_hot_water
+                data:
+                  entity_id: "{{ entity_id }}"
+                  time_period: "{{ period }}"
+                  on_off: "{{ 'off' if boosting else 'on' }}"
+          - alias: Main thermostat boosting - cancel
+            conditions: "{{ boosting and is_main }}"
+            sequence:
+              - action: hive.boost_heating_off
+                data:
+                  entity_id: "{{ entity_id }}"
+          - alias: Non-Hive valve boosting - cancel
+            conditions: "{{ boosting and not is_hive }}"
+            sequence:
+              - action: timer.cancel
+                target:
+                  entity_id: "{{ boost_timer }}"
+              - if: "{{ states(restore_scene) not in ['unknown', 'unavailable'] }}"
+                then:
+                  - action: scene.turn_on
+                    target:
+                      entity_id: "{{ restore_scene }}"
+                else:
+                  - action: climate.set_hvac_mode
+                    target:
+                      entity_id: "{{ entity_id }}"
+                    data:
+                      hvac_mode: "off"
+          - alias: Hive radiator valve boosting - cancel by restoring the snapshot
+            conditions: "{{ boosting }}"
+            sequence:
+              - if: "{{ states(restore_scene) not in ['unknown', 'unavailable'] }}"
+                then:
+                  - action: scene.turn_on
+                    target:
+                      entity_id: "{{ restore_scene }}"
+                else:
+                  - action: climate.set_hvac_mode
+                    target:
+                      entity_id: "{{ entity_id }}"
+                    data:
+                      hvac_mode: "off"
+          - alias: Non-Hive valve - start a Home Assistant boost
+            conditions: "{{ not is_hive }}"
+            sequence:
+              - action: scene.create
+                data:
+                  scene_id: "{{ restore_scene_id }}"
+                  snapshot_entities: ["{{ entity_id }}"]
+              - action: climate.set_hvac_mode
+                target:
+                  entity_id: "{{ entity_id }}"
+                data:
+                  hvac_mode: heat
+              - action: climate.set_temperature
+                target:
+                  entity_id: "{{ entity_id }}"
+                data:
+                  temperature: "{{ temp }}"
+              - action: timer.start
+                target:
+                  entity_id: "{{ boost_timer }}"
+                data:
+                  duration: "{{ period }}"
+        default:
+          - if: "{{ not is_main }}"
+            then:
+              - action: scene.create
+                data:
+                  scene_id: "{{ restore_scene_id }}"
+                  snapshot_entities: ["{{ entity_id }}"]
+          - action: hive.boost_heating_on
+            target:
+              entity_id: "{{ entity_id }}"
+            data:
+              time_period: "{{ period }}"
+              temperature: "{{ temp }}"
+
+  hive_adjust_target:
+    alias: Hive - nudge target temperature
+    description: >-
+      Moves the target by delta, clamped to the device's range. Kept for automations and voice;
+      the dashboard arrows use the card's write gate instead (one change after you stop tapping),
+      because Hive blocks bursts of changes. Don't call this many times in a row.
+    icon: mdi:thermometer-plus
+    mode: queued
+    max: 10
+    fields:
+      entity_id:
+        name: Entity
+        required: true
+        selector:
+          entity:
+            domain: climate
+      delta:
+        name: Delta
+        default: 0.5
+        selector:
+          number: {min: -5, max: 5, step: 0.5}
+    sequence:
+      - action: climate.set_temperature
+        target:
+          entity_id: "{{ entity_id }}"
+        data:
+          temperature: >-
+            {{ [[ (state_attr(entity_id, 'temperature') | float(18)) + (delta | float(0.5)),
+                  state_attr(entity_id, 'min_temp') | float(5) ] | max,
+                state_attr(entity_id, 'max_temp') | float(32) ] | min }}
+      - delay:
+          milliseconds: 700
+
+  hive_set_mode:
+    alias: Hive - set mode (Manual / Schedule / Off)
+    description: >-
+      For the main thermostat, Schedule hands control to the Home Assistant schedule once a
+      schedule tagged hive_heating exists; otherwise it falls back to Hive's own schedule.
+    icon: mdi:thermostat-cog
+    mode: queued
+    fields:
+      entity_id:
+        name: Entity
+        required: true
+        selector:
+          entity:
+            domain: [climate, water_heater]
+      mode:
+        name: Mode
+        required: true
+        selector:
+          select:
+            options: [manual, schedule, "off"]
+    sequence:
+      - variables:
+          is_main: "{{ entity_id == 'climate.hive_thermostat' }}"
+          ha_schedule_ready: >-
+            {{ states.switch | selectattr('attributes.tags', 'defined')
+               | selectattr('attributes.tags', 'contains', 'hive_heating') | list | count > 0 }}
+      - choose:
+          - alias: Hot water
+            conditions: "{{ entity_id.startswith('water_heater.') }}"
+            sequence:
+              - action: water_heater.set_operation_mode
+                target:
+                  entity_id: "{{ entity_id }}"
+                data:
+                  operation_mode: "{{ {'manual': 'on', 'schedule': 'eco', 'off': 'off'}[mode] }}"
+          - alias: Main thermostat on the Home Assistant schedule
+            conditions: "{{ is_main and mode == 'schedule' and ha_schedule_ready }}"
+            sequence:
+              - action: climate.set_hvac_mode
+                target:
+                  entity_id: "{{ entity_id }}"
+                data:
+                  hvac_mode: heat
+              - action: input_boolean.turn_on
+                target:
+                  entity_id: input_boolean.hive_ha_schedule
+              - action: script.hive_apply_schedule_now
+        default:
+          - if: "{{ is_main }}"
+            then:
+              - action: input_boolean.turn_off
+                target:
+                  entity_id: input_boolean.hive_ha_schedule
+          - action: climate.set_hvac_mode
+            target:
+              entity_id: "{{ entity_id }}"
+            data:
+              hvac_mode: "{{ {'manual': 'heat', 'schedule': 'auto', 'off': 'off'}[mode] }}"
+
+  hive_apply_schedule_now:
+    alias: Hive - apply current schedule slot now
+    description: Re-applies today's Home Assistant schedule slot (schedules tagged hive_heating).
+    icon: mdi:calendar-sync
+    mode: single
+    sequence:
+      - condition: state
+        entity_id: input_boolean.hive_ha_schedule
+        state: "on"
+      - variables:
+          day: "{{ now().strftime('%a') | lower }}"
+          sched: >-
+            {% set ns = namespace(single='', any='') %}
+            {% for s in states.switch | selectattr('attributes.tags', 'defined')
+                 | selectattr('attributes.tags', 'contains', 'hive_heating') | selectattr('state', 'eq', 'on') %}
+              {% set w = s.attributes.weekdays | default([]) %}
+              {% if day in w or 'daily' in w %}
+                {% if w | count == 1 %}{% set ns.single = s.entity_id %}{% else %}{% set ns.any = s.entity_id %}{% endif %}
+              {% endif %}
+            {% endfor %}{{ ns.single or ns.any }}
+      - condition: template
+        value_template: "{{ sched != '' }}"
+      - action: scheduler.run_action
+        data:
+          entity_id: "{{ sched }}"
+          time: "{{ now().strftime('%H:%M:%S') }}"
+
+  hive_advance_to_next:
+    alias: Hive - advance to next schedule slot
+    description: Hive-style "Advance to next" - applies the next Home Assistant schedule slot now.
+    icon: mdi:skip-next
+    mode: single
+    sequence:
+      - condition: state
+        entity_id: input_boolean.hive_ha_schedule
+        state: "on"
+      - variables:
+          sched: >-
+            {% set ns = namespace(best='', t=none) %}
+            {% for s in states.switch | selectattr('attributes.tags', 'defined')
+                 | selectattr('attributes.tags', 'contains', 'hive_heating') | selectattr('state', 'eq', 'on') %}
+              {% set nt = as_datetime(s.attributes.next_trigger) if s.attributes.next_trigger is defined and s.attributes.next_trigger else none %}
+              {% if nt is not none and (ns.t is none or nt < ns.t) %}{% set ns.t = nt %}{% set ns.best = s.entity_id %}{% endif %}
+            {% endfor %}{{ ns.best }}
+      - condition: template
+        value_template: "{{ sched != '' }}"
+      - action: scheduler.run_action
+        data:
+          entity_id: "{{ sched }}"
+          time: "{{ (as_datetime(state_attr(sched, 'next_trigger')) + timedelta(minutes=1)).strftime('%H:%M:%S') }}"
+
+automation:
+  - id: hive_style_end_valve_boost
+    alias: Hive-style - end Home Assistant boost on non-Hive valves
+    description: When a timer.boost_* finishes, put that valve back to its pre-boost mode and temperature.
+    mode: parallel
+    triggers:
+      - trigger: event
+        event_type: timer.finished
+    conditions:
+      - "{{ trigger.event.data.entity_id.startswith('timer.boost_') }}"
+    actions:
+      - action: scene.turn_on
+        target:
+          entity_id: "scene.hive_boost_{{ trigger.event.data.entity_id.split('.')[1][6:] }}"
+        continue_on_error: true
