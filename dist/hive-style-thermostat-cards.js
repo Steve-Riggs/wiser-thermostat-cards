@@ -9,7 +9,7 @@
  *   write gate                 - batches temperature changes so Hive's servers don't block them
  *                                (buttons: tap_action fire-dom-event with hive_nudge / hive_set)
  */
-const HSTC_VERSION = '1.3.1';
+const HSTC_VERSION = '1.3.2';
 console.info(`%c HIVE-STYLE-THERMOSTAT-CARDS %c v${HSTC_VERSION} `, 'background:#E8642E;color:#fff;font-weight:600', 'background:#4350E6;color:#fff');
 
 // Fonts used by the cards and the example dashboard (DM Serif Display + Inter, SIL OFL).
@@ -335,7 +335,7 @@ class HiveTempPicker extends HTMLElement {
 }
 
 /* ------------------------------------------------------------------ */
-/* custom:hive-schedule-card                                           */
+/* custom:hive-schedule-card (light/dark via --hs-* CSS variables)      */
 /* ------------------------------------------------------------------ */
 const HS_DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
 const HS_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
@@ -356,6 +356,7 @@ function hsFromMin(m) {
 const hsSleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 class HiveScheduleCard extends HTMLElement {
+  static getStubConfig() { return { entity: 'climate.hive_thermostat', title: 'Thermostat' }; }
   setConfig(c) {
     this._c = Object.assign({
       entity: 'climate.hive_thermostat', title: 'Thermostat', tag: 'hive_heating',
@@ -363,10 +364,10 @@ class HiveScheduleCard extends HTMLElement {
       mode_entity: 'input_boolean.hive_ha_schedule', default_temp: 18.5,
     }, c || {});
     this._day = (new Date().getDay() + 6) % 7;
+    this._overlay = null;
     this._sig = '';
   }
   getCardSize() { return 12; }
-  static getStubConfig() { return { entity: 'climate.hive_thermostat', title: 'Thermostat' }; }
   set hass(h) {
     this._hass = h;
     if (!this._root) this._init();
@@ -374,7 +375,7 @@ class HiveScheduleCard extends HTMLElement {
     if (sig !== this._sig) { this._sig = sig; this._renderMain(); }
   }
 
-  // ---- data ----
+  // ---------- data ----------
   _schedules() {
     const tag = this._c.tag;
     return Object.keys(this._hass.states).filter((k) => k.startsWith('switch.')).map((k) => this._hass.states[k])
@@ -414,7 +415,7 @@ class HiveScheduleCard extends HTMLElement {
     return parts.join('|') + (th ? th.state : '') + (md ? md.state : '') + this._day;
   }
 
-  // ---- saving ----
+  // ---------- saving ----------
   _slot(start, end, temp) {
     return {
       start: hsFromMin(start), stop: hsFromMin(end),
@@ -456,27 +457,30 @@ class HiveScheduleCard extends HTMLElement {
     }
     await this._hass.callService('scheduler', 'add', { name: `Heating ${HS_NAMES[di]}`, weekdays: [key], repeat_type: 'repeat', tags: [this._c.tag], timeslots });
   }
+  _toast(msg) {
+    this.dispatchEvent(new CustomEvent('hass-notification', { detail: { message: msg }, bubbles: true, composed: true }));
+  }
   _navigate(path) {
     history.pushState(null, '', path);
     window.dispatchEvent(new CustomEvent('location-changed', { bubbles: true, composed: true }));
   }
 
-  // ---- rendering ----
+  // ---------- rendering ----------
   _init() {
     this._root = this.attachShadow({ mode: 'open' });
     this._root.innerHTML = `
 <style>
-  :host { display: block; }
+  :host { display: block; color-scheme: var(--hs-scheme, light); }
   * { box-sizing: border-box; }
-  .page { position: relative; min-height: 100vh; min-height: 100dvh; background: #fff; font-family: Inter, sans-serif; color: #2F2F33; padding-bottom: 120px; -webkit-user-select: none; user-select: none; }
+  .page { position: relative; min-height: 100vh; min-height: 100dvh; background: var(--hs-bg2, #fff); font-family: Inter, sans-serif; color: var(--hs-text, #2F2F33); padding-bottom: 120px; -webkit-user-select: none; user-select: none; }
   button { all: unset; cursor: pointer; -webkit-tap-highlight-color: transparent; }
   .hdr { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; padding: calc(env(safe-area-inset-top) + 10px) 20px 0; height: calc(env(safe-area-inset-top) + 74px); }
-  .round { width: 46px; height: 46px; border-radius: 50%; background: #fff; box-shadow: 0 2px 8px rgba(0,0,0,0.10), inset 0 0 0 1px #ECECF0; display: flex; align-items: center; justify-content: center; }
-  .round ha-icon { --mdc-icon-size: 24px; color: #2F2F33; }
+  .round { width: 46px; height: 46px; border-radius: 50%; background: var(--hs-card, #fff); box-shadow: 0 2px 8px rgba(0,0,0,0.10), inset 0 0 0 1px var(--hs-line, #ECECF0); display: flex; align-items: center; justify-content: center; }
+  .round ha-icon { --mdc-icon-size: 24px; color: var(--hs-text, #2F2F33); }
   .title { font-size: 19px; white-space: nowrap; }
   .right { justify-self: end; }
   .status { padding: 14px 20px 18px; font-size: 15px; }
-  .days { background: #F2F3FB; display: grid; grid-template-columns: repeat(7, 1fr); padding: 12px 8px; }
+  .days { background: var(--hs-pill2, #F2F3FB); display: grid; grid-template-columns: repeat(7, 1fr); padding: 12px 8px; }
   .day { width: 40px; height: 40px; border-radius: 50%; margin: 0 auto; display: flex; align-items: center; justify-content: center; font-size: 18px; }
   .day.sel { background: #4350E6; color: #fff; }
   .day.today:not(.sel) { box-shadow: inset 0 0 0 1.5px #4350E6; color: #4350E6; }
@@ -485,25 +489,26 @@ class HiveScheduleCard extends HTMLElement {
   .circ { width: 56px; height: 56px; flex: none; border-radius: 50%; border: 3px solid #7B80EA; display: flex; align-items: center; justify-content: center; font-size: 17px; }
   .circ.on { border-color: #E8642E; font-size: 15px; }
   .time { font-size: 19px; }
-  .empty { padding: 30px 4px; color: #66666B; font-size: 16px; line-height: 1.5; }
-  .fab { position: fixed; right: 22px; bottom: calc(env(safe-area-inset-bottom) + 34px); width: 56px; height: 56px; border-radius: 50%; background: #4350E6; box-shadow: 0 0 0 6px #E5E7FB; display: flex; align-items: center; justify-content: center; z-index: 5; }
+  .empty { padding: 30px 4px; color: var(--hs-sub, #66666B); font-size: 16px; line-height: 1.5; }
+  .fab { position: fixed; right: 22px; bottom: calc(env(safe-area-inset-bottom) + 34px); width: 56px; height: 56px; border-radius: 50%; background: #4350E6; box-shadow: 0 0 0 6px var(--hs-ring, #E5E7FB); display: flex; align-items: center; justify-content: center; z-index: 5; }
   .fab ha-icon { --mdc-icon-size: 26px; color: #fff; }
-  .ov { position: fixed; inset: 0; z-index: 20; background: #fff; display: flex; flex-direction: column; font-family: Inter, sans-serif; color: #2F2F33; }
+  .ov { position: fixed; inset: 0; z-index: 20; background: var(--hs-bg2, #fff); display: flex; flex-direction: column; font-family: Inter, sans-serif; color: var(--hs-text, #2F2F33); }
   .ov .body { padding: 8px 20px; flex: 1; overflow-y: auto; }
-  .box { border-radius: 18px; background: #fff; box-shadow: 0 1px 10px rgba(40,40,80,0.08); overflow: hidden; }
+  .box { border-radius: 18px; background: var(--hs-card, #fff); box-shadow: 0 1px 10px rgba(40,40,80,0.08); overflow: hidden; }
   .field { display: flex; align-items: center; justify-content: space-between; padding: 0 18px; height: 64px; font-size: 18px; }
-  .sep { height: 2px; background: #F0F0F3; }
+  .sep { height: 2px; background: var(--hs-line, #F0F0F3); }
   .field input, .field select { -webkit-appearance: none; appearance: none; border: none; background: transparent; color: #4350E6; font: inherit; font-size: 18px; text-align: right; direction: rtl; min-width: 90px; outline: none; }
+  .field input::-webkit-date-and-time-value { text-align: right; }
   .err { color: #D9342B; font-size: 14px; padding: 12px 4px; min-height: 20px; }
-  .done { margin: 0 24px calc(env(safe-area-inset-bottom) + 24px); height: 54px; border-radius: 14px; background: #F6F6F8; color: #A0A0A6; display: flex; align-items: center; justify-content: center; font-size: 19px; }
+  .done { margin: 0 24px calc(env(safe-area-inset-bottom) + 24px); height: 54px; border-radius: 14px; background: var(--hs-line, #F6F6F8); color: var(--hs-sub, #A0A0A6); display: flex; align-items: center; justify-content: center; font-size: 19px; }
   .done.ready { background: #4350E6; color: #fff; }
   .sheetbg { position: fixed; inset: 0; z-index: 15; background: rgba(0,0,0,0.25); }
-  .sheet { position: fixed; left: 12px; right: 12px; bottom: calc(env(safe-area-inset-bottom) + 12px); z-index: 16; background: #fff; border-radius: 20px; overflow: hidden; font-family: Inter, sans-serif; }
-  .opt { display: flex; align-items: center; gap: 14px; padding: 18px 20px; font-size: 17px; color: #2F2F33; border-bottom: 1px solid #F0F0F3; width: 100%; }
+  .sheet { position: fixed; left: 12px; right: 12px; bottom: calc(env(safe-area-inset-bottom) + 12px); z-index: 16; background: var(--hs-card, #fff); border-radius: 20px; overflow: hidden; font-family: Inter, sans-serif; }
+  .opt { display: flex; align-items: center; gap: 14px; padding: 18px 20px; font-size: 17px; color: var(--hs-text, #2F2F33); border-bottom: 1px solid var(--hs-line, #F0F0F3); width: 100%; }
   .opt ha-icon { --mdc-icon-size: 22px; color: #4350E6; }
-  .opt.cancel { justify-content: center; color: #66666B; border-bottom: none; }
+  .opt.cancel { justify-content: center; color: var(--hs-sub, #66666B); border-bottom: none; }
   .chk { display: flex; align-items: center; justify-content: space-between; padding: 0 18px; height: 56px; font-size: 18px; width: 100%; }
-  .tick { width: 26px; height: 26px; border-radius: 50%; border: 2px solid #C9CAD6; display: flex; align-items: center; justify-content: center; }
+  .tick { width: 26px; height: 26px; border-radius: 50%; border: 2px solid var(--hs-sub, #C9CAD6); display: flex; align-items: center; justify-content: center; }
   .tick.on { background: #4350E6; border-color: #4350E6; }
   .tick ha-icon { --mdc-icon-size: 18px; color: #fff; }
 </style>
@@ -533,7 +538,8 @@ class HiveScheduleCard extends HTMLElement {
         if (nxt.start > p.end) rows.push({ on: false, start: p.end, end: nxt.start, label: `${hsFromMin(p.end)} - ${hsFromMin(nxt.start)}` });
       } else if (p.end < 1440) {
         const nd = (di + 1) % 7;
-        const lbl = next.length ? `${hsFromMin(next[0].start)} (${HS_SHORT[nd]})` : '00:00';
+        const ne = next.length ? next[0].start : 0;
+        const lbl = next.length ? `${hsFromMin(ne)} (${HS_SHORT[nd]})` : '00:00';
         rows.push({ on: false, start: p.end, end: 1440, label: `${hsFromMin(p.end)} - ${lbl}` });
       }
     });
@@ -547,7 +553,7 @@ class HiveScheduleCard extends HTMLElement {
     let status = 'Manual mode – schedule paused';
     if (md && md.state === 'on' && th && th.state === 'heat') status = 'Heating schedule is active';
     else if (th && th.state === 'off') status = 'Heating is off – schedule paused';
-    else if (th && th.state === 'auto') status = 'The thermostat is running its own schedule';
+    else if (th && th.state === 'auto') status = 'Hive is running its own schedule';
     this._root.querySelector('.status').textContent = status;
     const today = (new Date().getDay() + 6) % 7;
     const days = this._root.querySelector('.days');
@@ -563,7 +569,10 @@ class HiveScheduleCard extends HTMLElement {
     list.querySelectorAll('.row').forEach((b) => b.addEventListener('click', () => {
       const r = rows[parseInt(b.dataset.r, 10)];
       if (r.on) this._openEditor(this._day, r.idx);
-      else this._openEditor(this._day, -1, { start: r.start, end: Math.min(r.end, r.start + 120), temp: this._c.default_temp });
+      else {
+        const s = r.start, e = Math.min(r.end, s + 120);
+        this._openEditor(this._day, -1, { start: s, end: e, temp: this._c.default_temp });
+      }
     }));
   }
 
@@ -604,7 +613,8 @@ class HiveScheduleCard extends HTMLElement {
     ['.x-start', '.x-end', '.x-temp'].forEach((s) => { q(s).addEventListener('input', upd); q(s).addEventListener('change', upd); });
     q('.x-back').addEventListener('click', () => this._closeLayer());
     if (!isNew) q('.x-del').addEventListener('click', async () => {
-      try { await this._saveDay(di, periods.filter((_, i) => i !== idx)); this._closeLayer(); } catch (e) { q('.err').textContent = `Couldn't save: ${e.message || e}`; }
+      const rest = periods.filter((_, i) => i !== idx);
+      try { await this._saveDay(di, rest); this._closeLayer(); } catch (e) { q('.err').textContent = `Couldn't save: ${e.message || e}`; }
     });
     q('.done').addEventListener('click', async () => {
       if (!changed()) { this._closeLayer(); return; }
@@ -645,11 +655,10 @@ class HiveScheduleCard extends HTMLElement {
   _openCopy(di) {
     const sel = new Set();
     const draw = () => {
-      const rows = HS_NAMES.map((n, i) => (i === di ? '' : `<button class="chk" data-d="${i}"><span>${n}</span><span class="tick${sel.has(i) ? ' on' : ''}">${sel.has(i) ? '<ha-icon icon="mdi:check"></ha-icon>' : ''}</span></button>`)).filter(Boolean);
       this._layer.innerHTML = `
 <div class="ov">
   <div class="hdr"><button class="round x-back"><ha-icon icon="mdi:chevron-left"></ha-icon></button><div class="title">Copy ${HS_NAMES[di]}</div><div></div></div>
-  <div class="body"><div class="box">${rows.join('<div class="sep"></div>')}</div><div class="err"></div></div>
+  <div class="body"><div class="box">${HS_NAMES.map((n, i) => i === di ? '' : `<button class="chk" data-d="${i}"><span>${n}</span><span class="tick${sel.has(i) ? ' on' : ''}">${sel.has(i) ? '<ha-icon icon="mdi:check"></ha-icon>' : ''}</span></button>`).join('<div class="sep"></div>').replace(/^<div class="sep"><\/div>|<div class="sep"><\/div>(?=<div class="sep">)/g, '')}</div><div class="err"></div></div>
   <button class="done${sel.size ? ' ready' : ''}">Copy to ${sel.size} day${sel.size === 1 ? '' : 's'}</button>
 </div>`;
       const q = (s) => this._layer.querySelector(s);
@@ -660,7 +669,10 @@ class HiveScheduleCard extends HTMLElement {
         const src = this._periods(di);
         q('.done').textContent = 'Copying…';
         try {
-          for (const d of Array.from(sel).sort()) { await this._saveDay(d, src); await hsSleep(900); }
+          for (const d of Array.from(sel).sort()) {
+            await this._saveDay(d, src);
+            await hsSleep(900);
+          }
           this._closeLayer();
         } catch (e) { q('.err').textContent = `Couldn't copy: ${e.message || e}`; }
       });
