@@ -9,7 +9,7 @@
  *   write gate                 - batches temperature changes so Hive's servers don't block them
  *                                (buttons: tap_action fire-dom-event with hive_nudge / hive_set)
  */
-const HSTC_VERSION = '1.4.0';
+const HSTC_VERSION = '1.4.1';
 console.info(`%c HIVE-STYLE-THERMOSTAT-CARDS %c v${HSTC_VERSION} `, 'background:#E8642E;color:#fff;font-weight:600', 'background:#4350E6;color:#fff');
 
 // Fonts used by the cards and the example dashboard (DM Serif Display + Inter, SIL OFL).
@@ -872,6 +872,8 @@ class HiveSetupCard extends HTMLElement {
       }),
       det: hsDetect(h, main, water),
       log: [], busy: false, done: false,
+      // scripts already there (an earlier setup, or your own): leave them alone unless you untick this
+      dashOnly: !!h.states['script.hive_boost'],
     };
     if (saved) Object.assign(this._s.det, { mainBoost: saved.mainBoost || this._s.det.mainBoost, waterBoost: saved.waterBoost || this._s.det.waterBoost, waterState: saved.waterState || this._s.det.waterState, hub: saved.hub || '', battery: saved.battery || '' });
     this._render();
@@ -935,14 +937,14 @@ class HiveSetupCard extends HTMLElement {
       </div>`).join('') : '<div class="note">No other climate entities found.</div>'}
   </div>
 
-  <details class="box">
+  <details class="box" ${s.dashOnly ? 'open' : ''}>
     <summary class="h">Advanced (found automatically)</summary>
     <div class="lab">Heating boost sensor</div><select id="mainBoost">${this._opt(bins, s.det.mainBoost, 'None')}</select>
     <div class="lab">Hot water boost sensor</div><select id="waterBoost">${this._opt(bins, s.det.waterBoost, 'None')}</select>
     <div class="lab">Hot water on/off sensor</div><select id="waterState">${this._opt(bins, s.det.waterState, 'None')}</select>
     <div class="lab">Thermostat battery</div><select id="battery">${this._opt(sens, s.det.battery, 'None')}</select>
     <div class="lab">Hive hub status</div><select id="hub">${this._opt(bins, s.det.hub, 'None')}</select>
-    <label class="chk2"><input type="checkbox" id="dashOnly" ${s.dashOnly ? 'checked' : ''}> Dashboard only: don't create or change any switches, timers, scripts or automations</label>
+    <label class="chk2"><input type="checkbox" id="dashOnly" ${s.dashOnly ? 'checked' : ''}> Dashboard only: don't create or change any switches, timers, scripts or automations${h.states['script.hive_boost'] ? ' (ticked because your heating scripts already exist)' : ''}</label>
   </details>
 
   <div class="warn">This replaces everything on <b>this</b> dashboard with the heating dashboard. Your other dashboards aren't touched. You can come back here any time from Manage → Heating setup.</div>
@@ -970,6 +972,10 @@ class HiveSetupCard extends HTMLElement {
   async _install() {
     const h = this._hass, s = this._s;
     if (s.busy) return;
+    if (this.preview || this.editMode || /[?&]edit=1/.test(location.search)) {
+      s.log = [['err', 'Save this card and leave edit mode (tap Done) first, then press the button on the dashboard itself.']];
+      this._render(); return;
+    }
     if (!s.main) { s.log = [['err', 'Pick your main thermostat first.']]; this._render(); return; }
     s.busy = true; s.log = []; this._render();
     const log = (cls, msg) => { s.log.push([cls, msg]); this._render(); };
