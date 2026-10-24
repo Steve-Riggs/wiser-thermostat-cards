@@ -39,17 +39,21 @@ Install these first, from HACS unless noted:
 
 ## Installation
 
-1. **Cards**: HACS → ⋮ → *Custom repositories* → add `https://github.com/xtrendmaster/hive-style-thermostat-cards`, type *Dashboard*. Install **Hive-style Thermostat Cards** and reload the browser.
-2. **Package**: copy `package/hive_style_heating.yaml` to `/config/packages/`. If you don't use packages yet, add this to `configuration.yaml`:
-   ```yaml
-   homeassistant:
-     packages: !include_dir_named packages
-   ```
-   Edit the entity IDs at the top of the file, then restart Home Assistant.
-3. **Dashboard**: *Settings → Dashboards → Add dashboard → New dashboard from scratch*, URL `hive-heating`. Open it, then *⋮ → Edit → ⋮ → Raw configuration editor*, paste `examples/dashboard.yaml` and replace the example entity IDs with yours.
-4. **Schedule**: open *Schedule → ••• → Add heating period* and build your week. Tap **Schedule** on the thermostat page to hand control to Home Assistant. Hive then stays in manual mode and follows the temperatures Home Assistant sends.
+**Before you start:** in the Hive app, set your heating to **Manual**. Home Assistant runs the schedule from now on.
 
-### Example entity IDs to replace
+1. **Install the cards.** HACS → ⋮ → *Custom repositories* → add `https://github.com/xtrendmaster/hive-style-thermostat-cards`, type *Dashboard*. Install **Hive-style Thermostat Cards**, then reload the browser (or close and reopen the app).
+2. **Make an empty dashboard.** *Settings → Dashboards → Add dashboard → New dashboard from scratch*. Give it a name (e.g. *Heating*) and open it.
+3. **Add the setup card.** *✏️ Edit → Add card*, search for **Hive-style heating setup**, add it and click *Done*.
+4. **Pick your devices.** Choose your thermostat, hot water and radiator valves from the lists (you can rename the valves). The Hive boost sensors are found automatically.
+5. **Press "Create my heating dashboard".** It creates the switches, boost timers and scripts it needs and builds the whole dashboard: home screen, thermostat, hot water, one page per radiator, schedule, insights and manage. No YAML, no restart.
+
+To change things later (a new valve, a different name), open **Manage → Heating setup** and press *Update*.
+
+The setup page checks you have the other cards it needs (see Requirements) and tells you if one is missing.
+
+### Manual setup (advanced)
+
+Prefer YAML? Copy `package/hive_style_heating.yaml` to `/config/packages/` (with `homeassistant: packages: !include_dir_named packages` in `configuration.yaml`), edit the entity IDs at the top and restart. Then paste `examples/dashboard.yaml` into a new dashboard's *Raw configuration editor* and replace the example entity IDs:
 
 | Example | What it is |
 |---|---|
@@ -59,6 +63,8 @@ Install these first, from HACS unless noted:
 | `binary_sensor.hive_hot_water_state` | Hive hot water on/off |
 | `climate.bedroom_radiator` | A Hive radiator valve |
 | `climate.study_radiator` + `timer.boost_study_radiator` | Any other valve and its boost timer |
+
+Don't use both: the setup page leaves scripts that come from a YAML package alone.
 
 ## Using the cards on their own
 
@@ -107,6 +113,7 @@ edit_path: /hive-heating/schedule-edit
 
 ## Changelog
 
+- **1.4.0**: new **setup page** (`custom:hive-setup-card`): pick your thermostat, hot water and valves and it builds the whole dashboard, with no YAML. Fixed: cancelling a boost now puts the valve back how it was (it was switching it off).
 - **1.3.2**: the schedule card follows the dashboard's light/dark colours (`--hs-*` CSS variables) and shows a message if saving fails.
 - **1.3.1**: the schedule editor accepts any minute (not only 15-minute steps). There's no limit on periods per day.
 - **1.3.0**: the scroll wheel automatically shows the room's photo if the radiator's Area has a picture (Settings > Areas). `photo:` still overrides it; `area_photo: false` turns it off.
