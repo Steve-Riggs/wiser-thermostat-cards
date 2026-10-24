@@ -113,6 +113,7 @@ edit_path: /hive-heating/schedule-edit
 
 ## Changelog
 
+- **1.4.1**: the setup page only works after the card is saved (not in the card editor preview), and if heating scripts already exist it leaves them alone unless you untick *Dashboard only*.
 - **1.4.0**: new **setup page** (`custom:hive-setup-card`): pick your thermostat, hot water and valves and it builds the whole dashboard, with no YAML. Fixed: cancelling a boost now puts the valve back how it was (it was switching it off).
 - **1.3.2**: the schedule card follows the dashboard's light/dark colours (`--hs-*` CSS variables) and shows a message if saving fails.
 - **1.3.1**: the schedule editor accepts any minute (not only 15-minute steps). There's no limit on periods per day.
