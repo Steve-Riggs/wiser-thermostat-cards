@@ -93,7 +93,7 @@ script:
               - action: timer.cancel
                 target:
                   entity_id: "{{ boost_timer }}"
-              - if: "{{ states(restore_scene) not in ['unknown', 'unavailable'] }}"
+              - if: "{{ restore_scene in (states.scene | map(attribute='entity_id') | list) }}"
                 then:
                   - action: scene.turn_on
                     target:
@@ -107,7 +107,7 @@ script:
           - alias: Hive radiator valve boosting - cancel by restoring the snapshot
             conditions: "{{ boosting }}"
             sequence:
-              - if: "{{ states(restore_scene) not in ['unknown', 'unavailable'] }}"
+              - if: "{{ restore_scene in (states.scene | map(attribute='entity_id') | list) }}"
                 then:
                   - action: scene.turn_on
                     target:
