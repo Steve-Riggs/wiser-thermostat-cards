@@ -115,6 +115,7 @@ edit_path: /hive-heating/schedule-edit
 
 ## Changelog
 
+- **1.5.1**: heating-only homes (hot water set to *No hot water*): the setup page now leaves every hot water part out of the scripts, so there are no placeholder entities like `water_heater.none`. If no thermostat boost sensor is picked, boost is read from the thermostat itself. Already set up? Press *Update* with *Also replace heating scripts I made myself* ticked once. Thanks Matt.
 - **1.5.0**: hot water schedule in Home Assistant; Light / Dark / Auto appearance; valve battery card; the setup page checks for the Scheduler card and accepts UIX instead of card-mod. The setup page now leaves heating scripts you made yourself alone (tick *Also replace heating scripts I made myself* to update them; needed once if you set up with 1.4.x and want the hot water schedule).
 - **1.4.1**: the setup page only works after the card is saved (not in the card editor preview), and if heating scripts already exist it leaves them alone unless you untick *Dashboard only*.
 - **1.4.0**: new **setup page** (`custom:hive-setup-card`): pick your thermostat, hot water and valves and it builds the whole dashboard, with no YAML. Fixed: cancelling a boost now puts the valve back how it was (it was switching it off).
