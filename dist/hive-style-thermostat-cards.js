@@ -9,7 +9,7 @@
  *   write gate                 - batches temperature changes so Hive's servers don't block them
  *                                (buttons: tap_action fire-dom-event with hive_nudge / hive_set)
  */
-const HSTC_VERSION = '1.5.0';
+const HSTC_VERSION = '1.5.1';
 console.info(`%c HIVE-STYLE-THERMOSTAT-CARDS %c v${HSTC_VERSION} `, 'background:#E8642E;color:#fff;font-weight:600', 'background:#4350E6;color:#fff');
 
 // Fonts used by the cards and the example dashboard (DM Serif Display + Inter, SIL OFL).
@@ -872,6 +872,9 @@ function hsGenerate(c, urlPath) {
   s = hsSplitAll(s, HS_T.water, c.water || 'water_heater.none');
   s = hsSplitAll(s, '/hive-heating/', `/${urlPath}/`);
   const out = JSON.parse(s);
+  // drop placeholder entities (a part of Hive you don't have) from the cards' update lists
+  const tidy = (o) => { if (Array.isArray(o)) o.forEach(tidy); else if (o && typeof o === 'object') for (const k of Object.keys(o)) { if (k === 'triggers_update' && Array.isArray(o[k])) o[k] = o[k].filter((x) => !/\.none$/.test(x)); else tidy(o[k]); } };
+  tidy(out);
   out.hive_style_setup = c;
   return out;
 }
@@ -882,7 +885,36 @@ function hsPackageFor(c) {
   s = hsSplitAll(s, HS_T.waterBoost, c.waterBoost || 'binary_sensor.none');
   s = hsSplitAll(s, HS_T.main, c.main);
   s = hsSplitAll(s, HS_T.water, c.water || 'water_heater.none');
-  return JSON.parse(s);
+  // no main-thermostat boost sensor picked: read the boost from the thermostat itself
+  if (!c.mainBoost) s = hsSplitAll(s, "is_state('binary_sensor.none', 'on')", "is_state_attr(entity_id, 'preset_mode', 'boost')");
+  const p = JSON.parse(s);
+  if (!c.water) hsStripWater(p);
+  return p;
+}
+
+// Heating-only homes: leave every hot water part out of the scripts (no placeholder entities)
+function hsStripWater(p) {
+  delete p.input_boolean.hive_ha_water_schedule;
+  delete p.script.hive_apply_water_schedule_now;
+  const notWater = (b) => !/^Hot water/.test(b.alias || '');
+  for (const id of ['hive_boost', 'hive_set_mode']) {
+    const sc = p.script[id];
+    if (!sc) continue;
+    if (sc.fields && sc.fields.entity_id) sc.fields.entity_id.selector = { entity: { domain: 'climate' } };
+    for (const step of sc.sequence) {
+      if (step.variables) {
+        delete step.variables.is_water;
+        delete step.variables.ha_water_ready;
+        for (const k of Object.keys(step.variables)) {
+          if (typeof step.variables[k] !== 'string') continue;
+          step.variables[k] = step.variables[k]
+            .replace(/entity_id\.startswith\('water_heater\.'\) or /g, '')
+            .replace(/\{% elif entity_id == 'water_heater\.none' %\}[\s\S]*?(?=\{% (elif|else)\b)/g, '');
+        }
+      }
+      if (step.choose) step.choose = step.choose.filter(notWater);
+    }
+  }
 }
 
 class HiveSetupCard extends HTMLElement {
