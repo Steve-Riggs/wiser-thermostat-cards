@@ -20,6 +20,15 @@ input_boolean:
   heating_away_mode:
     name: Away / holiday mode
     icon: mdi:airplane
+  hive_ha_water_schedule:
+    name: Home Assistant runs the hot water schedule
+    icon: mdi:water-boiler-auto
+
+input_select:
+  hive_appearance:
+    name: Heating dashboard appearance
+    icon: mdi:theme-light-dark
+    options: [Light, Dark, Auto]
 
 timer:
   # Boost timer for a non-Hive radiator valve (Sonoff, Aqara, Tuya...).
@@ -213,10 +222,23 @@ script:
           ha_schedule_ready: >-
             {{ states.switch | selectattr('attributes.tags', 'defined')
                | selectattr('attributes.tags', 'contains', 'hive_heating') | list | count > 0 }}
+          ha_water_ready: >-
+            {{ states.switch | selectattr('attributes.tags', 'defined')
+               | selectattr('attributes.tags', 'contains', 'hive_hot_water') | list | count > 0 }}
       - choose:
+          - alias: Hot water on the Home Assistant schedule
+            conditions: "{{ entity_id.startswith('water_heater.') and mode == 'schedule' and ha_water_ready }}"
+            sequence:
+              - action: input_boolean.turn_on
+                target:
+                  entity_id: input_boolean.hive_ha_water_schedule
+              - action: script.hive_apply_water_schedule_now
           - alias: Hot water
             conditions: "{{ entity_id.startswith('water_heater.') }}"
             sequence:
+              - action: input_boolean.turn_off
+                target:
+                  entity_id: input_boolean.hive_ha_water_schedule
               - action: water_heater.set_operation_mode
                 target:
                   entity_id: "{{ entity_id }}"
@@ -261,6 +283,33 @@ script:
             {% set ns = namespace(single='', any='') %}
             {% for s in states.switch | selectattr('attributes.tags', 'defined')
                  | selectattr('attributes.tags', 'contains', 'hive_heating') | selectattr('state', 'eq', 'on') %}
+              {% set w = s.attributes.weekdays | default([]) %}
+              {% if day in w or 'daily' in w %}
+                {% if w | count == 1 %}{% set ns.single = s.entity_id %}{% else %}{% set ns.any = s.entity_id %}{% endif %}
+              {% endif %}
+            {% endfor %}{{ ns.single or ns.any }}
+      - condition: template
+        value_template: "{{ sched != '' }}"
+      - action: scheduler.run_action
+        data:
+          entity_id: "{{ sched }}"
+          time: "{{ now().strftime('%H:%M:%S') }}"
+
+  hive_apply_water_schedule_now:
+    alias: Hive - apply current hot water slot now
+    description: Re-applies today's Home Assistant hot water schedule slot (schedules tagged hive_hot_water).
+    icon: mdi:water-boiler-auto
+    mode: single
+    sequence:
+      - condition: state
+        entity_id: input_boolean.hive_ha_water_schedule
+        state: "on"
+      - variables:
+          day: "{{ now().strftime('%a') | lower }}"
+          sched: >-
+            {% set ns = namespace(single='', any='') %}
+            {% for s in states.switch | selectattr('attributes.tags', 'defined')
+                 | selectattr('attributes.tags', 'contains', 'hive_hot_water') | selectattr('state', 'eq', 'on') %}
               {% set w = s.attributes.weekdays | default([]) %}
               {% if day in w or 'daily' in w %}
                 {% if w | count == 1 %}{% set ns.single = s.entity_id %}{% else %}{% set ns.any = s.entity_id %}{% endif %}
