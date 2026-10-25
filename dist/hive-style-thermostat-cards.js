@@ -9,7 +9,7 @@
  *   write gate                 - batches temperature changes so Hive's servers don't block them
  *                                (buttons: tap_action fire-dom-event with hive_nudge / hive_set)
  */
-const HSTC_VERSION = '1.5.1';
+const HSTC_VERSION = '1.5.2';
 console.info(`%c HIVE-STYLE-THERMOSTAT-CARDS %c v${HSTC_VERSION} `, 'background:#E8642E;color:#fff;font-weight:600', 'background:#4350E6;color:#fff');
 
 // Fonts used by the cards and the example dashboard (DM Serif Display + Inter, SIL OFL).
@@ -1011,6 +1011,7 @@ class HiveSetupCard extends HTMLElement {
     <div class="note">The thermostat that switches your boiler on.</div>
     <select id="main">${this._opt(s.climates, s.main)}</select>
     <div class="h">Hot water</div>
+    <div class="note">Heating only? Choose "No hot water" and the hot water pages and settings are left out.</div>
     <select id="water">${this._opt(s.waters, s.water, 'No hot water')}</select>
   </div>
 
@@ -1030,8 +1031,8 @@ class HiveSetupCard extends HTMLElement {
   <details class="box">
     <summary class="h">Advanced (found automatically)</summary>
     <div class="lab">Heating boost sensor</div><select id="mainBoost">${this._opt(bins, s.det.mainBoost, 'None')}</select>
-    <div class="lab">Hot water boost sensor</div><select id="waterBoost">${this._opt(bins, s.det.waterBoost, 'None')}</select>
-    <div class="lab">Hot water on/off sensor</div><select id="waterState">${this._opt(bins, s.det.waterState, 'None')}</select>
+    ${s.water ? `<div class="lab">Hot water boost sensor</div><select id="waterBoost">${this._opt(bins, s.det.waterBoost, 'None')}</select>
+    <div class="lab">Hot water on/off sensor</div><select id="waterState">${this._opt(bins, s.det.waterState, 'None')}</select>` : ''}
     <div class="lab">Thermostat battery</div><select id="battery">${this._opt(sens, s.det.battery, 'None')}</select>
     <div class="lab">Hive hub status</div><select id="hub">${this._opt(bins, s.det.hub, 'None')}</select>
     <label class="chk2"><input type="checkbox" id="replaceOwn" ${s.replaceOwn ? 'checked' : ''}> Also replace heating scripts I made myself (normally they're left as they are)</label>
@@ -1046,7 +1047,7 @@ class HiveSetupCard extends HTMLElement {
     const $ = (id) => this.shadowRoot.getElementById(id);
     $('main').onchange = (e) => { s.main = e.target.value; s.det = hsDetect(h, s.main, s.water); this._render(); };
     $('water').onchange = (e) => { s.water = e.target.value; s.det = hsDetect(h, s.main, s.water); this._render(); };
-    ['mainBoost', 'waterBoost', 'waterState', 'battery', 'hub'].forEach((k) => { $(k).onchange = (e) => { s.det[k] = e.target.value; }; });
+    ['mainBoost', 'waterBoost', 'waterState', 'battery', 'hub'].forEach((k) => { const el = $(k); if (el) el.onchange = (e) => { s.det[k] = e.target.value; }; });
     $('replaceOwn').onchange = (e) => { s.replaceOwn = e.target.checked; };
     this.shadowRoot.querySelectorAll('.v-on').forEach((el) => { el.onchange = () => { valves[+el.dataset.i].on = el.checked; }; });
     this.shadowRoot.querySelectorAll('.v-name').forEach((el) => { el.oninput = () => { valves[+el.dataset.i].name = el.value; }; });
