@@ -19,7 +19,9 @@ A clean, phone-first heating dashboard for Home Assistant, inspired by the look 
 - **Heating schedule in Home Assistant** (`custom:hive-schedule-card`): a Hive-style day view with an editor. Tap a slot to change start, end and temperature, add or delete periods, or copy a day to other days. It works with the [Scheduler component](https://github.com/nielsfaber/scheduler-component).
 - **Advance to next** slot, like the app.
 - **Boost for any radiator valve**: Hive valves use Hive's own boost; other valves (Sonoff, Aqara, Tuya…) get a Home Assistant boost that puts them back how they were when it ends.
-- **Hot water** page with boost and On / Schedule / Off.
+- **Hot water** page with boost and On / Schedule / Off, and its own **hot water schedule** run by Home Assistant (same editor, On/Off slots).
+- **Light, dark or automatic** appearance, switchable on the Manage page.
+- **Valve batteries** at a glance on the Manage page, plus a small warning on a radiator's page when its battery is low.
 - **Insights**: temperature charts with apexcharts-card.
 - **Manage**: one place for modes, away mode and device health.
 - **Gentle on Hive's servers**: the wheel and arrows wait until you've finished, then send one change (never more than one every 10 seconds per thermostat). A small "Setting 19.5°" bubble shows the change is on its way.
@@ -113,6 +115,7 @@ edit_path: /hive-heating/schedule-edit
 
 ## Changelog
 
+- **1.5.0**: hot water schedule in Home Assistant; Light / Dark / Auto appearance; valve battery card; the setup page checks for the Scheduler card and accepts UIX instead of card-mod. The setup page now leaves heating scripts you made yourself alone (tick *Also replace heating scripts I made myself* to update them; needed once if you set up with 1.4.x and want the hot water schedule).
 - **1.4.1**: the setup page only works after the card is saved (not in the card editor preview), and if heating scripts already exist it leaves them alone unless you untick *Dashboard only*.
 - **1.4.0**: new **setup page** (`custom:hive-setup-card`): pick your thermostat, hot water and valves and it builds the whole dashboard, with no YAML. Fixed: cancelling a boost now puts the valve back how it was (it was switching it off).
 - **1.3.2**: the schedule card follows the dashboard's light/dark colours (`--hs-*` CSS variables) and shows a message if saving fails.
