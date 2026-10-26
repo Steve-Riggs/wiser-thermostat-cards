@@ -123,7 +123,7 @@ const path = require("node:path");
     await page.waitForFunction(() => window.__shared.confirms.length === 1);
     const observed = await page.evaluate(() => window.__shared);
     assert.match(observed.confirms[0], /Lobby, Kitchen/);
-    assert.match(observed.confirms[0], /cached/);
+    assert.match(observed.confirms[0], /Wiser cache, not a fresh hub query/);
     assert.equal(observed.writes, 0, "Declined confirmation must prevent any write");
     assert.deepEqual(pageErrors, [], "Browser has no uncaught JavaScript errors");
     console.log("Browser UI checks passed: mobile, overnight, focus, demo, explicit retry, live-save gate, assignment confirmation.");
