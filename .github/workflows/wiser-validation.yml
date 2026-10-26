@@ -1,0 +1,19 @@
+name: Validate Wiser-native editor
+
+on:
+  push:
+    branches: [main, 'feat/**']
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Test and build
+        run: npm run check
+      - name: Ensure built distribution is committed
+        run: git diff --exit-code -- dist/wiser-native-schedule-card.js
