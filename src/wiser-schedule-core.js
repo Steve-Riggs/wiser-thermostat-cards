@@ -74,7 +74,8 @@
     if (Object.prototype.hasOwnProperty.call(patch, "Time")) slots[index].Time = String(patch.Time);
     if (Object.prototype.hasOwnProperty.call(patch, "Setpoint"))
       slots[index].Setpoint = String(patch.Setpoint);
-    slots.sort((a, b) => minutes(a.Time) - minutes(b.Time));
+    // Keep the period at its visible row index when editing a time input.
+    // Reordering during input change would retarget adjacent controls unexpectedly.
     validate(draft);
     return draft;
   }
