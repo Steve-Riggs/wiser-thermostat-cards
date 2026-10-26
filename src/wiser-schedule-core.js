@@ -111,6 +111,30 @@
     return draft;
   }
 
+  function assignments(schedule) {
+    return (Array.isArray(schedule?.Assignments) ? schedule.Assignments : [])
+      .map((room) => ({ Id: Number(room.Id), Name: String(room.Name || "Room " + room.Id) }))
+      .sort((a, b) => a.Id - b.Id);
+  }
+  function assignmentsFingerprint(schedule) { return JSON.stringify(assignments(schedule)); }
+  function boundaries(schedule, day) {
+    const index = DAYS.indexOf(day);
+    if (index < 0) throw new Error("Unknown schedule day.");
+    const previousDay = DAYS[(index + 6) % 7];
+    const nextDay = DAYS[(index + 1) % 7];
+    const first = daySlots(schedule, day)[0];
+    const priorSlots = daySlots(schedule, previousDay);
+    const nextSlots = daySlots(schedule, nextDay);
+    return {
+      carryover: first.Time === "00:00" ? null : {
+        fromDay: previousDay, until: first.Time, setpoint: priorSlots[priorSlots.length - 1].Setpoint
+      },
+      nextDay,
+      nextTime: nextSlots[0].Time,
+      lastPeriodEnds: nextDay + " " + nextSlots[0].Time
+    };
+  }
+
   function fingerprint(schedule) {
     // Ignore volatile assignments and UI-only metadata when checking for concurrent schedule changes.
     return JSON.stringify({
@@ -138,9 +162,13 @@
       if (!editable(original) || !editable(draft)) throw new Error("This schedule cannot be edited safely.");
       if (Number(original.Id) !== Number(draft.Id)) throw new Error("Schedule identity mismatch.");
       validate(draft);
+      // NOTE: Wiser's schedule/id endpoint can return integration-cached data.
+      // These comparisons catch changes already observed by HA, NOT unobserved hub/app edits.
       const before = await this.read(original.Id);
       if (fingerprint(before) !== fingerprint(original))
-        throw new Error("The schedule was changed elsewhere. Reload before saving to avoid overwriting it.");
+        throw new Error("The schedule changed in Home Assistant's Wiser cache. Reload before saving.");
+      if (assignmentsFingerprint(before) !== assignmentsFingerprint(original))
+        throw new Error("Schedule room assignments changed in the Wiser cache. Reload before saving.");
       const result = await this.ws("wiser/schedule/save", {
         schedule_type: "Heating", schedule_id: Number(draft.Id), schedule: draft
       });
@@ -188,5 +216,6 @@
   }
 
   return { DAYS, DEMO_ROOMS, copy, validate, editable, daySlots, changeSlot, addSlot,
-    deleteSlot, copyDay, fingerprint, WiserTransport, DemoTransport };
+    deleteSlot, copyDay, assignments, assignmentsFingerprint, boundaries, fingerprint,
+    WiserTransport, DemoTransport };
 });
