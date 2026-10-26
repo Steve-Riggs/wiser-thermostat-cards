@@ -71,6 +71,7 @@ The Wiser integration's `wiser/schedule/id` WebSocket command returns its **cach
 - A failed connection does not trigger repeated automatic requests from normal Home Assistant state updates. The user must choose Retry.
 - The day editor displays setpoints continuing past midnight and shows the carried-over temperature before the day's first scheduled change.
 - Input edits keep the DOM controls mounted until deliberate navigation/actions, avoiding the card-wide HTML replacement on each change.
+- On valid time changes, adjacent "Until…" labels and the overnight carryover banner refresh **in place**, including when a midnight event adds/removes the carryover, without detaching the native time inputs. Chromium regression tests cover this.
 - An edited schedule assigned to multiple rooms affects all those rooms. The UI prompts for confirmation before real shared-schedule edits.
 - Passive-control/advanced schedules are view-only until the additional fields can be edited safely.
 - Schedule edits are limited to eight daily periods; live discovery and hot-water handling are intentionally not part of this card.
