@@ -1,0 +1,494 @@
+/* Wiser Style Heating schedule editor - generated from src/. MIT; see LICENSE and docs/ATTRIBUTION.md */
+/*
+ * Wiser Style Heating - Wiser-native schedule data and transport.
+ * The card communicates with the existing Wiser HA integration, never directly with the boiler.
+ * Original project: https://github.com/xtrendmaster/hive-style-thermostat-cards
+ * API reference: https://github.com/andyblac/wiser-schedule-card
+ * MIT License. See root LICENSE and docs/ATTRIBUTION.md.
+ */
+(function (root, factory) {
+  const api = factory();
+  if (typeof module === "object" && module.exports) module.exports = api;
+  root.WiserScheduleCore = api;
+})(typeof globalThis === "object" ? globalThis : this, function () {
+  "use strict";
+  const DAYS = Object.freeze(["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]);
+  const DEMO_ROOMS = Object.freeze([
+    ["Lobby", 19], ["Living Room/Dining Room", 21], ["Kitchen", 19],
+    ["Bedroom 1", 18], ["Bedroom 2", 18], ["Bedroom 3", 18],
+    ["Office", 20], ["Utility room", 17]
+  ]);
+  const copy = (value) => JSON.parse(JSON.stringify(value));
+  const validTime = (value) => typeof value === "string" && /^([01]\d|2[0-3]):[0-5]\d$/.test(value);
+  const minutes = (time) => Number(time.slice(0, 2)) * 60 + Number(time.slice(3));
+  const isHeating = (schedule) => String(schedule && schedule.Type).toLowerCase() === "heating";
+
+  function validate(schedule) {
+    if (!schedule || !isHeating(schedule)) throw new Error("Only Wiser heating schedules can be edited.");
+    if (!Array.isArray(schedule.ScheduleData) || schedule.ScheduleData.length !== 7)
+      throw new Error("A Wiser heating schedule requires seven days.");
+    const seen = new Set();
+    for (const entry of schedule.ScheduleData) {
+      if (!DAYS.includes(entry.day) || seen.has(entry.day)) throw new Error("Invalid or repeated schedule day.");
+      seen.add(entry.day);
+      if (!Array.isArray(entry.slots) || entry.slots.length < 1 || entry.slots.length > 8)
+        throw new Error(entry.day + " needs between one and eight periods.");
+      let previous = -1;
+      for (const slot of entry.slots) {
+        if (!validTime(slot.Time)) throw new Error("Invalid time in " + entry.day + ": " + slot.Time);
+        const at = minutes(slot.Time);
+        if (at <= previous) throw new Error("Periods must be in chronological order with unique start times.");
+        previous = at;
+        const setpoint = Number(slot.Setpoint);
+        const min = Number.isFinite(Number(schedule.MinSetpoint)) && schedule.MinSetpoint != null
+          ? Number(schedule.MinSetpoint) : 5;
+        const max = Number.isFinite(Number(schedule.MaxSetpoint)) && schedule.MaxSetpoint != null
+          ? Number(schedule.MaxSetpoint) : 30;
+        if (!Number.isFinite(setpoint) || (setpoint !== -20 && (setpoint < min || setpoint > max)))
+          throw new Error("Invalid temperature in " + entry.day + ": " + slot.Setpoint);
+      }
+    }
+    return true;
+  }
+
+  function editable(schedule) {
+    if (!isHeating(schedule)) return false;
+    // Passive control has additional fields that a simple time/temperature editor must not overwrite.
+    if (schedule.PassiveControl || schedule.PassiveRange) return false;
+    if (schedule.ScheduleData?.some((day) => day.slots?.some((slot) => Number(slot.Setpoint) === -20))) return false;
+    if (Math.abs(Number(schedule.Id)) === 1000) return false;
+    return true;
+  }
+
+  function daySlots(schedule, day) {
+    const record = schedule.ScheduleData.find((item) => item.day === day);
+    if (!record) throw new Error("Missing " + day);
+    return record.slots;
+  }
+
+  function changeSlot(schedule, day, index, patch) {
+    if (!editable(schedule)) throw new Error("This schedule is view-only in the first version.");
+    const draft = copy(schedule);
+    const slots = daySlots(draft, day);
+    if (!Number.isInteger(index) || index < 0 || index >= slots.length) throw new Error("Unknown period.");
+    // Preserve Wiser-specific slot fields, including SpecialTime, rather than creating a bare object.
+    if (Object.prototype.hasOwnProperty.call(patch, "Time")) slots[index].Time = String(patch.Time);
+    if (Object.prototype.hasOwnProperty.call(patch, "Setpoint"))
+      slots[index].Setpoint = String(patch.Setpoint);
+    slots.sort((a, b) => minutes(a.Time) - minutes(b.Time));
+    validate(draft);
+    return draft;
+  }
+
+  function addSlot(schedule, day, time, temperature) {
+    if (!editable(schedule)) throw new Error("This schedule is view-only in the first version.");
+    const draft = copy(schedule);
+    const slots = daySlots(draft, day);
+    slots.push({ Time: String(time), Setpoint: String(temperature), SpecialTime: "" });
+    slots.sort((a, b) => minutes(a.Time) - minutes(b.Time));
+    validate(draft);
+    return draft;
+  }
+
+  function deleteSlot(schedule, day, index) {
+    if (!editable(schedule)) throw new Error("This schedule is view-only in the first version.");
+    const draft = copy(schedule);
+    const slots = daySlots(draft, day);
+    if (!Number.isInteger(index) || index < 0 || index >= slots.length) throw new Error("Unknown period.");
+    slots.splice(index, 1);
+    validate(draft);
+    return draft;
+  }
+
+  function copyDay(schedule, source, targets) {
+    if (!editable(schedule)) throw new Error("This schedule is view-only in the first version.");
+    const draft = copy(schedule);
+    const slots = copy(daySlots(draft, source));
+    for (const day of targets) {
+      if (!DAYS.includes(day)) throw new Error("Unknown target day.");
+      daySlots(draft, day).splice(0, daySlots(draft, day).length, ...copy(slots));
+    }
+    validate(draft);
+    return draft;
+  }
+
+  function fingerprint(schedule) {
+    // Ignore volatile assignments and UI-only metadata when checking for concurrent schedule changes.
+    return JSON.stringify({
+      Id: Number(schedule.Id),
+      Name: schedule.Name,
+      Type: schedule.Type,
+      ScheduleData: DAYS.map((day) => ({ day, slots: daySlots(schedule, day) }))
+    });
+  }
+
+  class WiserTransport {
+    constructor(hass, hub) {
+      if (!hass || typeof hass.callWS !== "function") throw new Error("Home Assistant WebSocket API unavailable.");
+      this.hass = hass;
+      this.hub = hub || "";
+    }
+    ws(type, props = {}) { return this.hass.callWS({ type, hub: this.hub, ...props }); }
+    hubs() { return this.hass.callWS({ type: "wiser/hubs" }); }
+    async list() {
+      const rows = await this.ws("wiser/schedules", { schedule_type: "Heating" });
+      return rows.filter((row) => String(row.Type).toLowerCase() === "heating");
+    }
+    read(id) { return this.ws("wiser/schedule/id", { schedule_type: "Heating", schedule_id: Number(id) }); }
+    async save(original, draft) {
+      if (!editable(original) || !editable(draft)) throw new Error("This schedule cannot be edited safely.");
+      if (Number(original.Id) !== Number(draft.Id)) throw new Error("Schedule identity mismatch.");
+      validate(draft);
+      const before = await this.read(original.Id);
+      if (fingerprint(before) !== fingerprint(original))
+        throw new Error("The schedule was changed elsewhere. Reload before saving to avoid overwriting it.");
+      const result = await this.ws("wiser/schedule/save", {
+        schedule_type: "Heating", schedule_id: Number(draft.Id), schedule: draft
+      });
+      if (result !== "success" && result !== true) throw new Error("Wiser did not acknowledge the schedule update.");
+      const after = await this.read(draft.Id);
+      if (fingerprint(after) !== fingerprint(draft))
+        throw new Error("Save returned, but the Wiser readback differs. Check the hub before trying again.");
+      return after;
+    }
+  }
+
+  function makeDemoSchedules() {
+    return DEMO_ROOMS.map(([name, comfort], index) => ({
+      Id: index + 1, Name: name, Type: "Heating", SubType: "", MinSetpoint: 5, MaxSetpoint: 30,
+      Assignments: [{ Id: index + 1, Name: name }],
+      ScheduleData: DAYS.map((day, dayIndex) => ({
+        day, slots: (dayIndex < 5
+          ? [["06:30", comfort], ["08:30", 16], ["17:00", comfort], ["22:30", 16]]
+          : [["08:00", comfort], ["23:00", 16]])
+          .map(([Time, Setpoint]) => ({ Time, Setpoint: String(Setpoint), SpecialTime: "" }))
+      }))
+    }));
+  }
+
+  class DemoTransport {
+    constructor() { this.schedules = makeDemoSchedules(); this.hub = "demo"; }
+    async hubs() { return ["demo"]; }
+    async list() {
+      return this.schedules.map((s) => ({
+        Id: s.Id, Name: s.Name, Type: s.Type, Assignments: s.Assignments.length
+      }));
+    }
+    async read(id) {
+      const schedule = this.schedules.find((s) => s.Id === Number(id));
+      if (!schedule) throw new Error("Demo schedule not found.");
+      return copy(schedule);
+    }
+    async save(original, draft) {
+      validate(draft);
+      const current = await this.read(original.Id);
+      if (fingerprint(current) !== fingerprint(original)) throw new Error("Demo schedule changed. Reload it.");
+      this.schedules = this.schedules.map((s) => s.Id === draft.Id ? copy(draft) : s);
+      return this.read(draft.Id);
+    }
+  }
+
+  return { DAYS, DEMO_ROOMS, copy, validate, editable, daySlots, changeSlot, addSlot,
+    deleteSlot, copyDay, fingerprint, WiserTransport, DemoTransport };
+});
+
+
+/*
+ * Wiser Style Heating - Hive-inspired Wiser-native schedule card.
+ * Development prototype: use demo: true until a real Wiser hub has been commissioned.
+ * Bundled with src/wiser-schedule-core.js by scripts/build.cjs.
+ */
+(function () {
+  "use strict";
+  const Core = globalThis.WiserScheduleCore;
+  if (!Core) throw new Error("WiserScheduleCore must be loaded before the schedule card");
+  if (customElements.get("wiser-hive-schedule-card")) return;
+  const DAYS = Core.DAYS;
+  const esc = (input) => String(input ?? "").replace(/[&<>"']/g,
+    (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
+  const formatTemp = (value) => Number(value) === -20 ? "Off" : Number(value) + "°C";
+  const prettyError = (error) => error && error.message ? error.message : String(error);
+
+  class WiserHiveScheduleCard extends HTMLElement {
+    constructor() {
+      super();
+      this.attachShadow({ mode: "open" });
+      this.config = {};
+      this._hass = null;
+      this._loaded = false;
+      this._busy = false;
+      this._editing = false;
+      this._error = "";
+      this._notice = "";
+      this._day = "Monday";
+      this._items = [];
+      this._schedule = null;
+      this._draft = null;
+      this._id = null;
+      this._hub = "";
+      this._transport = null;
+      this.shadowRoot.addEventListener("click", (event) => this._handleClick(event));
+      this.shadowRoot.addEventListener("change", (event) => this._handleChange(event));
+    }
+    setConfig(config) {
+      this.config = { ...config };
+      if (config.demo !== true && config.demo !== false) this.config.demo = true;
+      this._loaded = false;
+      this._transport = null;
+      this._editing = false;
+      this._schedule = null;
+      this._draft = null;
+      if (this.isConnected && this._hass) this._initialize();
+    }
+    set hass(value) {
+      this._hass = value;
+      if (!this._loaded && !this._busy && this.isConnected) this._initialize();
+    }
+    get hass() { return this._hass; }
+    connectedCallback() {
+      this._render();
+      if (!this._loaded && this._hass) this._initialize();
+    }
+    getCardSize() { return 7; }
+    static getStubConfig() { return { demo: true }; }
+
+    async _initialize() {
+      if (this._busy || !this._hass) return;
+      this._busy = true;
+      this._error = "";
+      this._render();
+      try {
+        if (this.config.demo) {
+          this._hub = "demo";
+          this._transport = new Core.DemoTransport();
+        } else {
+          if (!this._hass.config?.components?.includes("wiser"))
+            throw new Error("The Wiser Home Assistant integration is not loaded. Enable demo mode to preview.");
+          const probe = new Core.WiserTransport(this._hass, "");
+          const hubs = await probe.hubs();
+          const selected = this.config.hub || (hubs.length === 1 ? hubs[0] : "");
+          if (!selected) throw new Error("More than one Wiser hub found; add hub: YOUR_HUB_NAME to this card.");
+          if (!hubs.includes(selected)) throw new Error("Selected Wiser hub was not found: " + selected);
+          this._hub = selected;
+          this._transport = new Core.WiserTransport(this._hass, selected);
+        }
+        this._items = await this._transport.list();
+        if (!this._items.length) throw new Error("No Wiser heating schedules found on this hub.");
+        const preferred = this._id && this._items.some((item) => item.Id === Number(this._id))
+          ? this._id : this._items[0].Id;
+        await this._read(preferred);
+        this._loaded = true;
+      } catch (error) {
+        this._error = prettyError(error);
+        this._loaded = false;
+      } finally {
+        this._busy = false;
+        this._render();
+      }
+    }
+
+    async _read(id) {
+      this._schedule = await this._transport.read(id);
+      this._id = Number(id);
+      this._draft = Core.copy(this._schedule);
+      this._editing = false;
+      this._notice = "";
+    }
+
+    async _run(task, notice = "") {
+      if (this._busy) return;
+      this._busy = true;
+      this._error = "";
+      this._render();
+      try {
+        await task();
+        if (notice) this._notice = notice;
+      } catch (error) {
+        this._error = prettyError(error);
+      } finally {
+        this._busy = false;
+        this._render();
+      }
+    }
+
+    _apply(callback) {
+      try {
+        this._draft = callback();
+        this._error = "";
+        this._render();
+      } catch (error) {
+        this._error = prettyError(error);
+        this._render();
+      }
+    }
+
+    async _handleChange(event) {
+      const target = event.target;
+      if (!(target instanceof HTMLElement) || this._busy) return;
+      if (target.dataset.action === "choose") {
+        await this._run(() => this._read(Number(target.value)));
+        return;
+      }
+      if (!this._editing || !this._draft) return;
+      if (target.dataset.action === "time" || target.dataset.action === "temperature") {
+        const day = target.dataset.day, index = Number(target.dataset.index);
+        const patch = target.dataset.action === "time"
+          ? { Time: target.value } : { Setpoint: target.value };
+        this._apply(() => Core.changeSlot(this._draft, day, index, patch));
+      }
+    }
+
+    async _handleClick(event) {
+      const node = event.target.closest("[data-action]");
+      if (!node || this._busy) return;
+      const action = node.dataset.action;
+      if (action === "day") {
+        this._day = node.dataset.day;
+        this._render();
+        return;
+      }
+      if (action === "reload") {
+        this._loaded = false;
+        await this._initialize();
+        return;
+      }
+      if (action === "edit") {
+        if (!Core.editable(this._schedule)) {
+          this._error = "Advanced Wiser schedules are view-only until their full fields are supported.";
+        } else {
+          this._draft = Core.copy(this._schedule);
+          this._editing = true;
+          this._error = "";
+        }
+        this._render();
+        return;
+      }
+      if (action === "cancel") {
+        this._draft = Core.copy(this._schedule);
+        this._editing = false;
+        this._error = "";
+        this._render();
+        return;
+      }
+      if (!this._editing) return;
+      if (action === "remove") {
+        this._apply(() => Core.deleteSlot(this._draft, this._day, Number(node.dataset.index)));
+        return;
+      }
+      if (action === "add") {
+        const existing = new Set(Core.daySlots(this._draft, this._day).map((item) => item.Time));
+        const time = ["12:00", "15:00", "10:00", "19:00", "05:00", "21:00", "23:30", "01:00"]
+          .find((candidate) => !existing.has(candidate));
+        const period = Core.daySlots(this._draft, this._day).slice(-1)[0];
+        this._apply(() => Core.addSlot(this._draft, this._day, time, Number(period.Setpoint)));
+        return;
+      }
+      if (action === "copy-weekdays" || action === "copy-weekend") {
+        const targets = action === "copy-weekdays" ? DAYS.slice(0, 5) : DAYS.slice(5);
+        this._apply(() => Core.copyDay(this._draft, this._day, targets.filter((day) => day !== this._day)));
+        return;
+      }
+      if (action === "save") {
+        const count = this._schedule.Assignments?.length || this._items.find((s) => s.Id === this._id)?.Assignments || 0;
+        if (!this.config.demo && count > 1 && !window.confirm(
+          "This Wiser schedule is shared with " + count + " rooms/devices. Changes will affect all of them. Save anyway?"
+        )) return;
+        await this._run(async () => {
+          const updated = await this._transport.save(this._schedule, this._draft);
+          this._schedule = updated;
+          this._draft = Core.copy(updated);
+          this._editing = false;
+        }, this.config.demo ? "Saved to demo memory only — no Wiser heating changed." : "Wiser schedule saved and read back from the hub.");
+      }
+    }
+
+    _render() {
+      const schedule = this._editing ? this._draft : this._schedule;
+      const configuredName = this.config.title || "Heating";
+      const loading = this._busy && !this._schedule;
+      const shared = (this._schedule?.Assignments?.length ||
+        this._items.find((item) => item.Id === this._id)?.Assignments || 0);
+      const rows = schedule ? Core.daySlots(schedule, this._day) : [];
+      const inputs = this._editing;
+      const options = this._items.map((entry) =>
+        `<option value="${entry.Id}" ${Number(entry.Id) === this._id ? "selected" : ""}>${esc(entry.Name)}</option>`
+      ).join("");
+      const days = DAYS.map((day) =>
+        `<button data-action="day" data-day="${day}" class="day ${day === this._day ? "active" : ""}" aria-pressed="${day === this._day}">${day.slice(0, 3)}</button>`
+      ).join("");
+      const periods = rows.map((slot, index) => {
+        const next = rows[index + 1];
+        const time = inputs
+          ? `<input aria-label="Start of period ${index + 1}" type="time" data-action="time" data-day="${this._day}" data-index="${index}" value="${esc(slot.Time)}"/>`
+          : `<strong>${esc(slot.Time)}</strong>`;
+        const temperature = inputs
+          ? `<input aria-label="Temperature for period ${index + 1}" type="number" min="5" max="30" step="0.5" data-action="temperature" data-day="${this._day}" data-index="${index}" value="${esc(slot.Setpoint)}"/>`
+          : `<span class="temp">${formatTemp(slot.Setpoint)}</span>`;
+        return `<div class="period">
+          <div class="period-dot"></div>
+          <div class="period-time">${time}<small>${next ? "Until " + esc(next.Time) : "Until midnight"}</small></div>
+          <div class="period-value">${temperature}</div>
+          ${inputs ? `<button class="remove" aria-label="Remove period" title="Remove period" data-action="remove" data-index="${index}">×</button>` : ""}
+        </div>`;
+      }).join("");
+      this.shadowRoot.innerHTML = `
+      <style>
+        :host{display:block;--ws-bg:#f7f8fa;--ws-accent:#263b52;--ws-ink:#172234;--ws-muted:#647286;font:inherit;color:var(--ws-ink)}
+        *{box-sizing:border-box}button,select,input{font:inherit}
+        .shell{border-radius:23px;background:var(--ws-bg);padding:clamp(14px,3vw,28px);box-shadow:0 8px 28px #00000012;max-width:900px;margin:auto}
+        .top{display:flex;justify-content:space-between;align-items:center;gap:12px}.eyebrow{font-size:11px;letter-spacing:2px;font-weight:800;color:var(--ws-muted);text-transform:uppercase}
+        h2{font:600 clamp(26px,4vw,37px) Georgia,serif;letter-spacing:-.6px;margin:8px 0 4px}
+        .status{color:var(--ws-muted);font-size:12px}.demo{background:#ebddc9;color:#7b4b21;border-radius:20px;padding:7px 11px;font-size:11px;font-weight:800}
+        .settings{margin-top:20px;background:#fff;border-radius:15px;padding:15px;display:flex;align-items:center;justify-content:space-between;gap:12px;box-shadow:0 1px 5px #00000008}
+        .settings label{font-size:12px;color:var(--ws-muted)}select{display:block;margin-top:6px;min-width:200px;max-width:100%;border:0;font-weight:700;color:var(--ws-ink);background:transparent;outline-offset:4px}
+        .days{display:grid;grid-template-columns:repeat(7,1fr);gap:5px;margin:20px 0 15px}.day{border:0;cursor:pointer;background:#fff;border-radius:10px;padding:12px 2px;color:var(--ws-muted);font-weight:700}
+        .day.active{background:var(--ws-accent);color:white}.day:focus-visible,button:focus-visible{outline:3px solid #6381a0;outline-offset:3px}
+        .timeline{border-radius:19px;background:#fff;padding:8px 19px}.period{display:flex;align-items:center;gap:14px;min-height:75px;border-bottom:1px solid #edf0f2;position:relative}
+        .period:last-child{border-bottom:none}.period-dot{border:4px solid #e5a36d;width:17px;height:17px;border-radius:50%;flex-shrink:0}
+        .period-time{display:flex;flex-direction:column;gap:4px;flex:1;min-width:0}.period-time strong{font-size:18px}.period-time small{font-size:11px;color:var(--ws-muted)}
+        .temp{font-size:25px;font-weight:600;color:#ab622d}.period-value input{width:80px}.period input{padding:7px;border:1px solid #c9d0da;border-radius:8px;background:white;max-width:135px}
+        .remove{border:0;background:#fbe9e8;color:#b43d38;font-size:24px;border-radius:9px;width:32px;height:36px;cursor:pointer}
+        .actions{display:flex;justify-content:flex-end;gap:9px;flex-wrap:wrap;margin-top:16px}button.action{border:0;background:#e5e9ee;color:var(--ws-ink);padding:11px 16px;border-radius:12px;cursor:pointer;font-weight:700;font-size:13px}
+        button.primary{background:var(--ws-accent);color:#fff}button:disabled{opacity:.5;cursor:wait}
+        .message{margin-top:12px;border-radius:12px;padding:12px;font-size:13px;background:#edf2f6}.error{background:#ffebec;color:#8e2730}
+        .warning{background:#fff2d9;color:#6c4d1c;font-size:12px;padding:12px;border-radius:12px;margin-top:14px}
+        .foot{font-size:11px;color:var(--ws-muted);margin:17px 0 0}
+        @media(max-width:560px){.shell{border-radius:14px;padding:13px}.settings{align-items:stretch;flex-direction:column}.days{gap:3px}.day{font-size:12px}.timeline{padding:5px 10px}.period{gap:7px}.period-value input{width:67px}.period input{font-size:13px;padding:5px}.period-time strong{font-size:16px}.temp{font-size:21px}}
+      </style>
+      <section class="shell">
+        <header class="top"><div><div class="eyebrow">Wiser Style Heating</div><h2>${esc(configuredName)}</h2>
+        <div class="status">${this.config.demo ? "Interactive preview" : "Wiser hub · " + esc(this._hub || "connecting")}</div></div>
+        ${this.config.demo ? '<span class="demo">DEMO</span>' : ""}
+        </header>
+        ${schedule ? `
+          <div class="settings"><label>Room schedule<select data-action="choose" ${this._editing || this._busy ? "disabled" : ""}>${options}</select></label>
+            <span class="status">${shared} assigned room${shared === 1 ? "" : "s"}</span></div>
+          <nav class="days" aria-label="Days of the week">${days}</nav>
+          <div class="timeline">${periods}</div>
+          ${shared > 1 ? '<div class="warning">Shared schedule: saving changes will affect every room using it.</div>' : ""}
+          ${!Core.editable(this._schedule) ? '<div class="warning">This advanced Wiser schedule is view-only to protect unsupported fields.</div>' : ""}
+          <div class="actions">
+            ${inputs ? `
+              <button class="action" data-action="copy-weekdays">Copy to weekdays</button>
+              <button class="action" data-action="copy-weekend">Copy to weekend</button>
+              <button class="action" data-action="add">Add period</button>
+              <button class="action" data-action="cancel">Cancel</button>
+              <button class="action primary" data-action="save">Save schedule</button>`
+            : `<button class="action" data-action="reload">Reload</button>
+              <button class="action primary" data-action="edit" ${!Core.editable(this._schedule) ? "disabled" : ""}>Edit schedule</button>`}
+          </div>` : (loading ? '<p>Loading heating schedules…</p>' : "")}
+        ${this._error ? `<div role="alert" class="message error">${esc(this._error)} <button class="action" data-action="reload">Retry</button></div>` : ""}
+        ${this._notice ? `<div role="status" class="message">${esc(this._notice)}</div>` : ""}
+        <div class="foot">Schedules are owned by the Wiser hub. ${this.config.demo ? "Demo changes are only held until this card reloads." : "Changes are sent to Wiser and checked against hub readback."}</div>
+      </section>`;
+    }
+  }
+  customElements.define("wiser-hive-schedule-card", WiserHiveScheduleCard);
+  window.customCards = window.customCards || [];
+  window.customCards.push({
+    type: "wiser-hive-schedule-card",
+    name: "Wiser Style Heating Schedule",
+    description: "Hive-inspired editor for Wiser hub schedules (with demo mode).",
+    preview: true
+  });
+})();
