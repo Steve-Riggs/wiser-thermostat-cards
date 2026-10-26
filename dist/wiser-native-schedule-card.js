@@ -75,7 +75,8 @@
     if (Object.prototype.hasOwnProperty.call(patch, "Time")) slots[index].Time = String(patch.Time);
     if (Object.prototype.hasOwnProperty.call(patch, "Setpoint"))
       slots[index].Setpoint = String(patch.Setpoint);
-    slots.sort((a, b) => minutes(a.Time) - minutes(b.Time));
+    // Keep the period at its visible row index when editing a time input.
+    // Reordering during input change would retarget adjacent controls unexpectedly.
     validate(draft);
     return draft;
   }
@@ -112,6 +113,30 @@
     return draft;
   }
 
+  function assignments(schedule) {
+    return (Array.isArray(schedule?.Assignments) ? schedule.Assignments : [])
+      .map((room) => ({ Id: Number(room.Id), Name: String(room.Name || "Room " + room.Id) }))
+      .sort((a, b) => a.Id - b.Id);
+  }
+  function assignmentsFingerprint(schedule) { return JSON.stringify(assignments(schedule)); }
+  function boundaries(schedule, day) {
+    const index = DAYS.indexOf(day);
+    if (index < 0) throw new Error("Unknown schedule day.");
+    const previousDay = DAYS[(index + 6) % 7];
+    const nextDay = DAYS[(index + 1) % 7];
+    const first = daySlots(schedule, day)[0];
+    const priorSlots = daySlots(schedule, previousDay);
+    const nextSlots = daySlots(schedule, nextDay);
+    return {
+      carryover: first.Time === "00:00" ? null : {
+        fromDay: previousDay, until: first.Time, setpoint: priorSlots[priorSlots.length - 1].Setpoint
+      },
+      nextDay,
+      nextTime: nextSlots[0].Time,
+      lastPeriodEnds: nextDay + " " + nextSlots[0].Time
+    };
+  }
+
   function fingerprint(schedule) {
     // Ignore volatile assignments and UI-only metadata when checking for concurrent schedule changes.
     return JSON.stringify({
@@ -139,9 +164,13 @@
       if (!editable(original) || !editable(draft)) throw new Error("This schedule cannot be edited safely.");
       if (Number(original.Id) !== Number(draft.Id)) throw new Error("Schedule identity mismatch.");
       validate(draft);
+      // NOTE: Wiser's schedule/id endpoint can return integration-cached data.
+      // These comparisons catch changes already observed by HA, NOT unobserved hub/app edits.
       const before = await this.read(original.Id);
       if (fingerprint(before) !== fingerprint(original))
-        throw new Error("The schedule was changed elsewhere. Reload before saving to avoid overwriting it.");
+        throw new Error("The schedule changed in Home Assistant's Wiser cache. Reload before saving.");
+      if (assignmentsFingerprint(before) !== assignmentsFingerprint(original))
+        throw new Error("Schedule room assignments changed in the Wiser cache. Reload before saving.");
       const result = await this.ws("wiser/schedule/save", {
         schedule_type: "Heating", schedule_id: Number(draft.Id), schedule: draft
       });
@@ -189,7 +218,8 @@
   }
 
   return { DAYS, DEMO_ROOMS, copy, validate, editable, daySlots, changeSlot, addSlot,
-    deleteSlot, copyDay, fingerprint, WiserTransport, DemoTransport };
+    deleteSlot, copyDay, assignments, assignmentsFingerprint, boundaries, fingerprint,
+    WiserTransport, DemoTransport };
 });
 
 
@@ -216,6 +246,7 @@
       this.config = {};
       this._hass = null;
       this._loaded = false;
+      this._initializationAttempted = false;
       this._busy = false;
       this._editing = false;
       this._error = "";
@@ -234,6 +265,7 @@
       this.config = { ...config };
       if (config.demo !== true && config.demo !== false) this.config.demo = true;
       this._loaded = false;
+      this._initializationAttempted = false;
       this._transport = null;
       this._editing = false;
       this._schedule = null;
@@ -242,18 +274,19 @@
     }
     set hass(value) {
       this._hass = value;
-      if (!this._loaded && !this._busy && this.isConnected) this._initialize();
+      if (!this._initializationAttempted && !this._busy && this.isConnected) this._initialize();
     }
     get hass() { return this._hass; }
     connectedCallback() {
       this._render();
-      if (!this._loaded && this._hass) this._initialize();
+      if (!this._initializationAttempted && this._hass) this._initialize();
     }
     getCardSize() { return 7; }
     static getStubConfig() { return { demo: true }; }
 
     async _initialize() {
-      if (this._busy || !this._hass) return;
+      if (this._busy || !this._hass || this._initializationAttempted) return;
+      this._initializationAttempted = true;
       this._busy = true;
       this._error = "";
       this._render();
@@ -311,14 +344,25 @@
       }
     }
 
-    _apply(callback) {
+    _inlineError() {
+      // Preserve active input and native time picker instead of replacing innerHTML.
+      const errorBox = this.shadowRoot.querySelector?.("#inline-error");
+      if (!errorBox) return;
+      errorBox.textContent = this._error;
+      errorBox.hidden = !this._error;
+    }
+    _apply(callback, render = true) {
       try {
         this._draft = callback();
         this._error = "";
-        this._render();
+        if (render) this._render();
+        else this._inlineError();
+        return true;
       } catch (error) {
         this._error = prettyError(error);
-        this._render();
+        if (render) this._render();
+        else this._inlineError();
+        return false;
       }
     }
 
@@ -334,7 +378,10 @@
         const day = target.dataset.day, index = Number(target.dataset.index);
         const patch = target.dataset.action === "time"
           ? { Time: target.value } : { Setpoint: target.value };
-        this._apply(() => Core.changeSlot(this._draft, day, index, patch));
+        const oldValue = Core.daySlots(this._draft, day)[index][target.dataset.action === "time" ? "Time" : "Setpoint"];
+        // 'change', not 'input': do not destroy focus or recreate time/number inputs while editing.
+        const ok = this._apply(() => Core.changeSlot(this._draft, day, index, patch), false);
+        if (!ok) target.value = String(oldValue);
       }
     }
 
@@ -349,6 +396,7 @@
       }
       if (action === "reload") {
         this._loaded = false;
+        this._initializationAttempted = false;
         await this._initialize();
         return;
       }
@@ -389,16 +437,40 @@
         return;
       }
       if (action === "save") {
-        const count = this._schedule.Assignments?.length || this._items.find((s) => s.Id === this._id)?.Assignments || 0;
-        if (!this.config.demo && count > 1 && !window.confirm(
-          "This Wiser schedule is shared with " + count + " rooms/devices. Changes will affect all of them. Save anyway?"
-        )) return;
+        if (!this.config.demo && this.config.allow_live_writes !== true) {
+          this._error = "Live writes are disabled. The Wiser schedule API can return cached data; set allow_live_writes: true only after backing up schedules and accepting that concurrent changes can still be overwritten.";
+          this._render();
+          return;
+        }
         await this._run(async () => {
+          if (!this.config.demo) {
+            // Wiser schedule/id returns integration-cached data, NOT an authoritative live hub fetch.
+            // Rechecking here narrows the window for already-observed changes but cannot close the race.
+            const observed = await this._transport.read(this._id);
+            if (Core.fingerprint(observed) !== Core.fingerprint(this._schedule))
+              throw new Error("A Wiser schedule change was observed. Reload before saving.");
+            if (Core.assignmentsFingerprint(observed) !== Core.assignmentsFingerprint(this._schedule))
+              throw new Error("Wiser room assignments have changed. Reload before saving.");
+            const names = Core.assignments(observed).map((room) => room.Name);
+            const count = this._items.find((item) => Number(item.Id) === this._id)?.Assignments;
+            if (typeof count === "number" && count !== names.length)
+              throw new Error("Schedule assignment count differs from cached room names. Reload before saving.");
+            const affected = names.length ? names.join(", ") : "none currently shown";
+            const message =
+              "Confirm Wiser schedule update for: " + affected + ".\n\n" +
+              "WARNING: These details come from Home Assistant's Wiser cache, not a fresh hub query. " +
+              "A change made in the Wiser app that has not reached HA can be overwritten. " +
+              "There is no atomic conflict protection. Continue?";
+            if (!window.confirm(message)) return;
+          }
           const updated = await this._transport.save(this._schedule, this._draft);
           this._schedule = updated;
           this._draft = Core.copy(updated);
           this._editing = false;
-        }, this.config.demo ? "Saved to demo memory only — no Wiser heating changed." : "Wiser schedule saved and read back from the hub.");
+          this._notice = this.config.demo
+            ? "Saved to demo memory only — no Wiser heating changed."
+            : "Save acknowledged and checked against Wiser integration readback (which may be cached).";
+        });
       }
     }
 
@@ -409,6 +481,7 @@
       const shared = (this._schedule?.Assignments?.length ||
         this._items.find((item) => item.Id === this._id)?.Assignments || 0);
       const rows = schedule ? Core.daySlots(schedule, this._day) : [];
+      const boundary = schedule ? Core.boundaries(schedule, this._day) : null;
       const inputs = this._editing;
       const options = this._items.map((entry) =>
         `<option value="${entry.Id}" ${Number(entry.Id) === this._id ? "selected" : ""}>${esc(entry.Name)}</option>`
@@ -418,6 +491,8 @@
       ).join("");
       const periods = rows.map((slot, index) => {
         const next = rows[index + 1];
+        const until = next ? "Until " + esc(next.Time)
+          : "Until " + esc(boundary.nextDay) + " " + esc(boundary.nextTime);
         const time = inputs
           ? `<input aria-label="Start of period ${index + 1}" type="time" data-action="time" data-day="${this._day}" data-index="${index}" value="${esc(slot.Time)}"/>`
           : `<strong>${esc(slot.Time)}</strong>`;
@@ -426,7 +501,7 @@
           : `<span class="temp">${formatTemp(slot.Setpoint)}</span>`;
         return `<div class="period">
           <div class="period-dot"></div>
-          <div class="period-time">${time}<small>${next ? "Until " + esc(next.Time) : "Until midnight"}</small></div>
+          <div class="period-time">${time}<small>${until}</small></div>
           <div class="period-value">${temperature}</div>
           ${inputs ? `<button class="remove" aria-label="Remove period" title="Remove period" data-action="remove" data-index="${index}">×</button>` : ""}
         </div>`;
@@ -452,6 +527,8 @@
         button.primary{background:var(--ws-accent);color:#fff}button:disabled{opacity:.5;cursor:wait}
         .message{margin-top:12px;border-radius:12px;padding:12px;font-size:13px;background:#edf2f6}.error{background:#ffebec;color:#8e2730}
         .warning{background:#fff2d9;color:#6c4d1c;font-size:12px;padding:12px;border-radius:12px;margin-top:14px}
+        .carry{background:#e8eff5;color:#344d66;font-size:12px;padding:12px;border-radius:12px;margin:12px 0}
+        [hidden]{display:none!important}
         .foot{font-size:11px;color:var(--ws-muted);margin:17px 0 0}
         @media(max-width:560px){.shell{border-radius:14px;padding:13px}.settings{align-items:stretch;flex-direction:column}.days{gap:3px}.day{font-size:12px}.timeline{padding:5px 10px}.period{gap:7px}.period-value input{width:67px}.period input{font-size:13px;padding:5px}.period-time strong{font-size:16px}.temp{font-size:21px}}
       </style>
@@ -464,8 +541,10 @@
           <div class="settings"><label>Room schedule<select data-action="choose" ${this._editing || this._busy ? "disabled" : ""}>${options}</select></label>
             <span class="status">${shared} assigned room${shared === 1 ? "" : "s"}</span></div>
           <nav class="days" aria-label="Days of the week">${days}</nav>
+          ${boundary.carryover ? `<div class="carry">00:00–${esc(boundary.carryover.until)}: ${formatTemp(boundary.carryover.setpoint)} carried over from ${esc(boundary.carryover.fromDay)}.</div>` : ""}
           <div class="timeline">${periods}</div>
-          ${shared > 1 ? '<div class="warning">Shared schedule: saving changes will affect every room using it.</div>' : ""}
+          ${shared > 1 ? '<div class="warning">Shared schedule: saving changes will affect every assigned room. Assignments will be rechecked before confirming.</div>' : ""}
+          ${!this.config.demo ? '<div class="warning">Wiser schedule reads may be cached. Live saves are not atomic and are disabled unless allow_live_writes: true is set.</div>' : ""}
           ${!Core.editable(this._schedule) ? '<div class="warning">This advanced Wiser schedule is view-only to protect unsupported fields.</div>' : ""}
           <div class="actions">
             ${inputs ? `
@@ -477,9 +556,10 @@
             : `<button class="action" data-action="reload">Reload</button>
               <button class="action primary" data-action="edit" ${!Core.editable(this._schedule) ? "disabled" : ""}>Edit schedule</button>`}
           </div>` : (loading ? '<p>Loading heating schedules…</p>' : "")}
-        ${this._error ? `<div role="alert" class="message error">${esc(this._error)} <button class="action" data-action="reload">Retry</button></div>` : ""}
+        <div id="inline-error" role="alert" class="message error" ${this._error ? "" : "hidden"}>${esc(this._error)}</div>
+        ${this._error && !this._loaded ? '<button class="action" data-action="reload">Retry connection</button>' : ""}
         ${this._notice ? `<div role="status" class="message">${esc(this._notice)}</div>` : ""}
-        <div class="foot">Schedules are owned by the Wiser hub. ${this.config.demo ? "Demo changes are only held until this card reloads." : "Changes are sent to Wiser and checked against hub readback."}</div>
+        <div class="foot">Schedules are owned by the Wiser hub. ${this.config.demo ? "Demo changes are only held until this card reloads." : "Live readback reflects the Wiser integration cache; recent changes in the Wiser app may not be visible."}</div>
       </section>`;
     }
   }
