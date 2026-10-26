@@ -87,7 +87,7 @@ test("conflicting remote change blocks save", async () => {
     callWS: async ({ type, schedule_id }) => type === "wiser/schedule/id" ? demo.read(schedule_id)
       : (() => { throw Error("Must not write"); })()
   }, "Main Hub");
-  await assert.rejects(() => transport.save(original, draft), /changed elsewhere/);
+  await assert.rejects(() => transport.save(original, draft), /changed in Home Assistant's Wiser cache/);
 });
 test("incorrect Wiser readback is reported rather than claiming success", async () => {
   const demo = fixture();
