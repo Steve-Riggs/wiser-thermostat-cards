@@ -92,8 +92,41 @@ const path = require("node:path");
     await live.locator("button[data-action='save']").click();
     assert.match(await live.locator(".shell").innerText(), /Live writes are disabled/);
     assert.equal(await page.evaluate(() => window.__liveTest.saves), 0);
+
+    // Opted-in writes still require a confirmation naming currently observed rooms.
+    await page.evaluate(() => {
+      const demo = new WiserScheduleCore.DemoTransport();
+      demo.schedules[0].Assignments.push({ Id: 3, Name: "Kitchen" });
+      window.__shared = { confirms: [], writes: 0 };
+      window.confirm = (message) => {
+        window.__shared.confirms.push(message);
+        return false;
+      };
+      const card = document.createElement("wiser-hive-schedule-card");
+      card.setConfig({ demo: false, hub: "My hub", allow_live_writes: true });
+      document.body.appendChild(card);
+      card.hass = {
+        config: { components: ["wiser"] },
+        callWS: async (message) => {
+          if (message.type === "wiser/hubs") return ["My hub"];
+          if (message.type === "wiser/schedules") return demo.list();
+          if (message.type === "wiser/schedule/id") return demo.read(message.schedule_id);
+          if (message.type === "wiser/schedule/save") { window.__shared.writes++; return "success"; }
+          throw Error("Unexpected message " + message.type);
+        }
+      };
+    });
+    const shared = page.locator("wiser-hive-schedule-card").nth(3);
+    await shared.locator("button[data-action='edit']").waitFor();
+    await shared.locator("button[data-action='edit']").click();
+    await shared.locator("button[data-action='save']").click();
+    await page.waitForFunction(() => window.__shared.confirms.length === 1);
+    const observed = await page.evaluate(() => window.__shared);
+    assert.match(observed.confirms[0], /Lobby, Kitchen/);
+    assert.match(observed.confirms[0], /cached/);
+    assert.equal(observed.writes, 0, "Declined confirmation must prevent any write");
     assert.deepEqual(pageErrors, [], "Browser has no uncaught JavaScript errors");
-    console.log("Browser UI checks passed: mobile, overnight, focus, demo, explicit retry, live-save gate.");
+    console.log("Browser UI checks passed: mobile, overnight, focus, demo, explicit retry, live-save gate, assignment confirmation.");
   } finally {
     await browser.close();
   }
