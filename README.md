@@ -1,3 +1,19 @@
+# Wiser Style Heating — development preview
+
+**This fork is being adapted for Drayton Wiser; it is not yet a drop-in replacement for the original Hive dashboard.**
+
+The first working slice is a separate, mobile-friendly **Wiser-native schedule card** featuring eight interactive demo rooms, weekday/weekend editing, period add/remove/copy, optimistic concurrency checks and hub readback after live saves. It uses the existing Wiser Home Assistant integration and **never installs a second schedule executor**.
+
+- **Progress and manual preview setup:** [Development guide](docs/DEVELOPMENT.md)
+- **Current development branch:** [feat/wiser-native-schedule-editor](https://github.com/Steve-Riggs/wiser-thermostat-cards/tree/feat/wiser-native-schedule-editor)
+- **Attributions:** [Credits and licences](docs/ATTRIBUTION.md)
+
+The pre-existing Hive JavaScript bundle, examples and package are retained for reference during migration. **Do not install the old Hive setup package expecting Wiser compatibility.** This branch's new Wiser card is not yet the default HACS card; use the manual preview setup from the guide instead. No boiler or hub is modified by this repository itself.
+
+---
+
+## Original upstream project (reference only)
+
 # Hive-style thermostat cards for Home Assistant
 
 [![HACS Custom](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://hacs.xyz/docs/faq/custom_repositories)
