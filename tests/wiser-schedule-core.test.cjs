@@ -98,3 +98,43 @@ test("incorrect Wiser readback is reported rather than claiming success", async 
   }, "Main Hub");
   await assert.rejects(() => transport.save(original, draft), /readback differs/);
 });
+
+test("overnight carryover comes from previous day and last slot ends next morning", async () => {
+  const schedule = await fixture().read(1);
+  const monday = Core.boundaries(schedule, "Monday");
+  assert.deepEqual(monday.carryover, {
+    fromDay: "Sunday", until: "06:30", setpoint: "16"
+  });
+  assert.equal(monday.lastPeriodEnds, "Tuesday 06:30");
+  assert.equal(Core.boundaries(schedule, "Sunday").lastPeriodEnds, "Monday 06:30");
+  const midnight = Core.changeSlot(schedule, "Monday", 0, { Time: "00:00" });
+  assert.equal(Core.boundaries(midnight, "Monday").carryover, null);
+});
+test("changed Wiser room assignments block writes even when temperatures are unchanged", async () => {
+  const demo = fixture();
+  const original = await demo.read(1);
+  const draft = Core.changeSlot(original, "Monday", 0, { Setpoint: "20" });
+  let attemptedWrites = 0;
+  const transport = new Core.WiserTransport({
+    callWS: async (message) => {
+      if (message.type === "wiser/schedule/id") {
+        const refreshed = await demo.read(1);
+        refreshed.Assignments.push({ Id: 50, Name: "Bedroom 3" });
+        return refreshed;
+      }
+      attemptedWrites++;
+      return "success";
+    }
+  }, "Main Hub");
+  await assert.rejects(() => transport.save(original, draft), /room assignments changed/);
+  assert.equal(attemptedWrites, 0);
+});
+test("failed Wiser acknowledgement cannot be reported as a successful save", async () => {
+  const demo = fixture(), original = await demo.read(1);
+  const draft = Core.changeSlot(original, "Monday", 0, { Setpoint: "20" });
+  const transport = new Core.WiserTransport({
+    callWS: async ({ type, schedule_id }) =>
+      type === "wiser/schedule/id" ? demo.read(schedule_id) : "unexpected response"
+  }, "Main Hub");
+  await assert.rejects(() => transport.save(original, draft), /did not acknowledge/);
+});
