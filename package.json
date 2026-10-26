@@ -1,0 +1,13 @@
+{
+  "name": "wiser-thermostat-cards",
+  "private": true,
+  "version": "0.1.0-dev",
+  "description": "Hive-inspired Home Assistant interface backed by the Wiser hub",
+  "scripts": {
+    "build": "node scripts/build.cjs",
+    "test": "node --test tests/*.test.cjs",
+    "check": "node --check src/wiser-schedule-core.js && node --check src/wiser-native-schedule-card.js && npm test && npm run build"
+  },
+  "license": "MIT",
+  "engines": { "node": ">=20" }
+}
