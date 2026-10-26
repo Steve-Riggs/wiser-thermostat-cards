@@ -10,7 +10,8 @@ const path = require("node:path");
     const page = await browser.newPage({ viewport: { width: 390, height: 850 } });
     await page.setContent("<!doctype html><html><body style='margin:0'></body></html>");
     await page.addScriptTag({ path: path.resolve(__dirname, "../dist/wiser-native-schedule-card.js") });
-    page.on("pageerror", (error) => { throw error; });
+    const pageErrors = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
     await page.evaluate(() => {
       const card = document.createElement("wiser-hive-schedule-card");
       card.setConfig({ title: "Heating schedules", demo: true });
@@ -20,8 +21,8 @@ const path = require("node:path");
     });
     const card = page.locator("wiser-hive-schedule-card");
     await card.locator("select[data-action='choose']").waitFor();
-    assert.match(await card.innerText(), /00:00–06:30: 16°C carried over from Sunday/);
-    assert.match(await card.innerText(), /Until Tuesday 06:30/);
+    assert.match(await card.locator(".shell").innerText(), /00:00–06:30: 16°C carried over from Sunday/);
+    assert.match(await card.locator(".shell").innerText(), /Until Tuesday 06:30/);
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
     assert.ok(overflow <= 1, "Mobile schedule does not produce page-width overflow");
 
@@ -42,9 +43,9 @@ const path = require("node:path");
     assert.equal(await firstTime.inputValue(), "06:15");
 
     await card.locator("button[data-action='save']").click();
-    assert.match(await card.innerText(), /Saved to demo memory only/);
-    assert.match(await card.innerText(), /06:15/);
-    assert.match(await card.innerText(), /20.5°C/);
+    assert.match(await card.locator(".shell").innerText(), /Saved to demo memory only/);
+    assert.match(await card.locator(".shell").innerText(), /06:15/);
+    assert.match(await card.locator(".shell").innerText(), /20.5°C/);
 
     // When the WebSocket is unavailable, repeated hass updates must not retry automatically.
     await page.evaluate(() => {
@@ -89,8 +90,9 @@ const path = require("node:path");
     await live.locator("button[data-action='edit']").waitFor();
     await live.locator("button[data-action='edit']").click();
     await live.locator("button[data-action='save']").click();
-    assert.match(await live.innerText(), /Live writes are disabled/);
+    assert.match(await live.locator(".shell").innerText(), /Live writes are disabled/);
     assert.equal(await page.evaluate(() => window.__liveTest.saves), 0);
+    assert.deepEqual(pageErrors, [], "Browser has no uncaught JavaScript errors");
     console.log("Browser UI checks passed: mobile, overnight, focus, demo, explicit retry, live-save gate.");
   } finally {
     await browser.close();
