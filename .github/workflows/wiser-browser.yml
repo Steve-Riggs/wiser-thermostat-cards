@@ -1,0 +1,24 @@
+name: Browser interaction regression
+
+on:
+  push:
+    branches: [main, 'feat/**']
+  pull_request:
+
+jobs:
+  chromium:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install test-only browser tooling
+        run: npm install --no-save playwright@1.58.2
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Build card
+        run: npm run build
+      - name: Real browser UI interactions
+        run: node tests/browser-ui.cjs
