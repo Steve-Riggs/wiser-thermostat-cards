@@ -18,7 +18,7 @@
     ["Office", 20], ["Utility room", 17]
   ]);
   const copy = (value) => JSON.parse(JSON.stringify(value));
-  const validTime = (value) => typeof value === "string" && /^([01]\\d|2[0-3]):[0-5]\\d$/.test(value);
+  const validTime = (value) => typeof value === "string" && /^([01]\d|2[0-3]):[0-5]\d$/.test(value);
   const minutes = (time) => Number(time.slice(0, 2)) * 60 + Number(time.slice(3));
   const isHeating = (schedule) => String(schedule && schedule.Type).toLowerCase() === "heating";
 
@@ -54,6 +54,7 @@
     if (!isHeating(schedule)) return false;
     // Passive control has additional fields that a simple time/temperature editor must not overwrite.
     if (schedule.PassiveControl || schedule.PassiveRange) return false;
+    if (schedule.ScheduleData?.some((day) => day.slots?.some((slot) => Number(slot.Setpoint) === -20))) return false;
     if (Math.abs(Number(schedule.Id)) === 1000) return false;
     return true;
   }
@@ -143,7 +144,7 @@
       const result = await this.ws("wiser/schedule/save", {
         schedule_type: "Heating", schedule_id: Number(draft.Id), schedule: draft
       });
-      if (result === false) throw new Error("Wiser rejected the schedule update.");
+      if (result !== "success" && result !== true) throw new Error("Wiser did not acknowledge the schedule update.");
       const after = await this.read(draft.Id);
       if (fingerprint(after) !== fingerprint(draft))
         throw new Error("Save returned, but the Wiser readback differs. Check the hub before trying again.");
