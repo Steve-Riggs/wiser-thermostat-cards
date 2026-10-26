@@ -126,6 +126,30 @@
       errorBox.textContent = this._error;
       errorBox.hidden = !this._error;
     }
+    _refreshTimePresentation() {
+      // Update only derived labels. Never replace the input nodes while the
+      // browser's native time/number picker may still own focus.
+      if (!this._editing || !this._draft) return;
+      const rows = Core.daySlots(this._draft, this._day);
+      const boundary = Core.boundaries(this._draft, this._day);
+      const endLabels = this.shadowRoot.querySelectorAll("[data-period-end]");
+      endLabels.forEach((label) => {
+        const index = Number(label.dataset.periodEnd);
+        const next = rows[index + 1];
+        label.textContent = next
+          ? "Until " + next.Time
+          : "Until " + boundary.nextDay + " " + boundary.nextTime;
+      });
+      const carry = this.shadowRoot.querySelector("[data-carryover]");
+      if (carry) {
+        carry.hidden = !boundary.carryover;
+        carry.textContent = boundary.carryover
+          ? "00:00–" + boundary.carryover.until + ": " +
+            formatTemp(boundary.carryover.setpoint) +
+            " carried over from " + boundary.carryover.fromDay + "."
+          : "";
+      }
+    }
     _apply(callback, render = true) {
       try {
         this._draft = callback();
@@ -157,6 +181,7 @@
         // 'change', not 'input': do not destroy focus or recreate time/number inputs while editing.
         const ok = this._apply(() => Core.changeSlot(this._draft, day, index, patch), false);
         if (!ok) target.value = String(oldValue);
+        else if (target.dataset.action === "time") this._refreshTimePresentation();
       }
     }
 
@@ -276,7 +301,7 @@
           : `<span class="temp">${formatTemp(slot.Setpoint)}</span>`;
         return `<div class="period">
           <div class="period-dot"></div>
-          <div class="period-time">${time}<small>${until}</small></div>
+          <div class="period-time">${time}<small data-period-end="${index}">${until}</small></div>
           <div class="period-value">${temperature}</div>
           ${inputs ? `<button class="remove" aria-label="Remove period" title="Remove period" data-action="remove" data-index="${index}">×</button>` : ""}
         </div>`;
@@ -316,7 +341,9 @@
           <div class="settings"><label>Room schedule<select data-action="choose" ${this._editing || this._busy ? "disabled" : ""}>${options}</select></label>
             <span class="status">${shared} assigned room${shared === 1 ? "" : "s"}</span></div>
           <nav class="days" aria-label="Days of the week">${days}</nav>
-          ${boundary.carryover ? `<div class="carry">00:00–${esc(boundary.carryover.until)}: ${formatTemp(boundary.carryover.setpoint)} carried over from ${esc(boundary.carryover.fromDay)}.</div>` : ""}
+          <div class="carry" data-carryover ${boundary.carryover ? "" : "hidden"}>${boundary.carryover
+            ? `00:00–${esc(boundary.carryover.until)}: ${formatTemp(boundary.carryover.setpoint)} carried over from ${esc(boundary.carryover.fromDay)}.`
+            : ""}</div>
           <div class="timeline">${periods}</div>
           ${shared > 1 ? '<div class="warning">Shared schedule: saving changes will affect every assigned room. Assignments will be rechecked before confirming.</div>' : ""}
           ${!this.config.demo ? '<div class="warning">Wiser schedule reads may be cached. Live saves are not atomic and are disabled unless allow_live_writes: true is set.</div>' : ""}
