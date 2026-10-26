@@ -11,7 +11,7 @@
   const DAYS = Core.DAYS;
   const esc = (input) => String(input ?? "").replace(/[&<>"']/g,
     (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
-  const formatTemp = (value) => Number(value) === -20 ? "Off" : Number(value) + "°";
+  const formatTemp = (value) => Number(value) === -20 ? "Off" : Number(value) + "°C";
   const prettyError = (error) => error && error.message ? error.message : String(error);
 
   class WiserHiveScheduleCard extends HTMLElement {
@@ -228,7 +228,7 @@
           : `<strong>${esc(slot.Time)}</strong>`;
         const temperature = inputs
           ? `<input aria-label="Temperature for period ${index + 1}" type="number" min="5" max="30" step="0.5" data-action="temperature" data-day="${this._day}" data-index="${index}" value="${esc(slot.Setpoint)}"/>`
-          : `<span class="temp">${formatTemp(slot.Setpoint)}C</span>`;
+          : `<span class="temp">${formatTemp(slot.Setpoint)}</span>`;
         return `<div class="period">
           <div class="period-dot"></div>
           <div class="period-time">${time}<small>${next ? "Until " + esc(next.Time) : "Until midnight"}</small></div>
